@@ -27,6 +27,11 @@ env/
 # --- MAXFIY: hech qachon GitHubga chiqmasin ---
 license.key
 *.hash
+*.key
+*.pem
+*.p12
+*.pfx
+vidaa/certs/
 admin_password.txt
 password.txt
 vidaa_tokens.json

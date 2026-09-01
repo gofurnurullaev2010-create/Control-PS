@@ -29,7 +29,7 @@ class AdminLoginDialog(QDialog):
         password_layout = QHBoxLayout()
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password_input.setPlaceholderText('Parol: gofa03')
+        self.password_input.setPlaceholderText('Admin parolini kiriting')
         self.password_input.setMinimumHeight(40)
         password_layout.addWidget(self.password_input)
         self.toggle_btn = QPushButton('👁')
@@ -59,27 +59,16 @@ class AdminLoginDialog(QDialog):
         """Login qilish"""
         try:
             password = self.password_input.text().strip()
-            print(f'Login urinish: \'{password}\' (uzunligi: {len(password)})')
-            print(f'Parol belgilari: {[char for char in password]}')
             if not password:
                 self.error_label.setText('Parol bo\'sh bo\'lmasligi kerak!')
                 return
             else:
-                ADMIN_PASSWORD = 'gofa10'
-                print(f'To\'g\'ri parol: \'{ADMIN_PASSWORD}\' (uzunligi: {len(ADMIN_PASSWORD)})')
-                print(f'Parol solishtirish: \'{password}\' == \'{ADMIN_PASSWORD}\' -> {password == ADMIN_PASSWORD}')
-                if len(password) != len(ADMIN_PASSWORD):
-                    print(f'Uzunlik farqi: {len(password)} != {len(ADMIN_PASSWORD)}')
-                else:
-                    for i, (p, a) in enumerate(zip(password, ADMIN_PASSWORD)):
-                        if p != a:
-                            print(f'Belgi farqi {i}-pozitsiyada: \'{p}\' != \'{a}\'')
-                if password == ADMIN_PASSWORD:
+                if app_password.verify_admin_password(password):
                     print('Login muvaffaqiyatli!')
                     self.accept()
                 else:
                     print('Login xato!')
-                    self.error_label.setText('Parol: gofa10')
+                    self.error_label.setText('Parol noto\'g\'ri!')
                     self.password_input.clear()
                     self.password_input.setFocus()
                     QTimer.singleShot(3000, self.clear_error)
