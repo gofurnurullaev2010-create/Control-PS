@@ -1,0 +1,17 @@
+"""Material uslubidagi UI ranglari."""
+from __future__ import annotations
+BG_MAIN = '#FAFAFA'
+BG_SIDEBAR = '#FFFFFF'
+BG_CARD = '#FFFFFF'
+BG_HEADER = '#F6F8FB'
+TEXT_PRIMARY = '#202124'
+TEXT_SECONDARY = '#5F6368'
+TEXT_MUTED = '#94A3B8'
+ACCENT = '#6B7C3B'
+ACCENT_HOVER = '#5A6A32'
+BORDER = '#E6E6E6'
+COL_GREEN = '#16A34A'
+COL_RED = '#DC2626'
+COL_BLUE = '#2563EB'
+COL_CYAN = '#0284C7'
+GOLD = '#D97706'

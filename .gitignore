@@ -1,0 +1,55 @@
+# --- Yig'ilgan fayllar (PyInstaller) ---
+dist/
+build/
+*.spec
+
+# --- Dekompilyatsiya / tahlil ish papkasi ---
+_extract/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- Baza va zaxira nusxalari (mijoz va moliyaviy ma'lumotlar) ---
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# --- Loglar ---
+*.log
+*.log.*
+
+# --- MAXFIY: hech qachon GitHubga chiqmasin ---
+license.key
+*.hash
+admin_password.txt
+password.txt
+vidaa_tokens.json
+webos_devices.json
+license_online_config.json
+license_server_admin.json
+license_online_cache.json
+
+# --- Shaxsiy / lokal sozlamalar ---
+operators.json
+mijozlar.json
+tv_config.json
+
+# --- Ish holati fayllari ---
+.cps_ntsync
+.cps_timeguard
+reports/
+zakaz_qr_*.png
+ZAKAZ_QR_*.png
+output-metadata.json
+
+# --- OS / IDE ---
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

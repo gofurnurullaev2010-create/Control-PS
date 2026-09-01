@@ -1,0 +1,113 @@
+from __future__ import annotations
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+import database as db
+class DatabaseCompatTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._db_path = Path(self._tmpdir.name) / 'test_control_ps.db'
+        self._patch = patch.object(db, 'DB_PATH', self._db_path)
+        self._patch.start()
+        db.init_db()
+    def tearDown(self) -> None:
+        self._patch.stop()
+        self._tmpdir.cleanup()
+    def test_station_ids_initialized(self) -> None:
+        ids = db.list_station_ids()
+        self.assertGreaterEqual(len(ids), 1)
+        self.assertTrue(all((isinstance(s, str) for s in ids)))
+    def test_revenue_split_empty_day(self) -> None:
+        day = db.current_business_date().isoformat()
+        split = db.revenue_split_for_day(day)
+        self.assertIn('total', split)
+        self.assertIn('session_total', split)
+        self.assertIn('drink_total', split)
+        self.assertGreaterEqual(split['total'], 0.0)
+    def test_booking_and_expense_roundtrip(self) -> None:
+        bid = db.add_booking('Test', '+998901234567', 'STOL-01', '2026-07-10T12:00:00')
+        self.assertGreater(bid, 0)
+        bookings = db.list_bookings('Test')
+        self.assertEqual(len(bookings), 1)
+        eid = db.add_expense('Test xarajat', 5000, 'cash', 'note')
+        self.assertGreater(eid, 0)
+        expenses = db.list_expenses('Test')
+        self.assertEqual(len(expenses), 1)
+        total = db.expense_total_for_day()
+        self.assertGreaterEqual(total, 5000.0)
+    def test_debtor_add_and_list(self) -> None:
+        did = db.add_debtor('Ali', '+998901111111', 10000, 'test')
+        self.assertGreater(did, 0)
+        rows = db.list_debtors('Ali')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(float(rows[0]['amount']), 10000.0)
+    def test_joystick_time_prorate(self) -> None:
+        from datetime import datetime, timedelta
+        sid = db.list_station_ids()[0]
+        session_id = db.start_session_row(sid, total_seconds=5400, is_vip=True)
+        db.add_joystick_charge(sid, 3000, session_id)
+        past = (datetime.now() - timedelta(minutes=30)).isoformat(timespec='seconds')
+        conn = db._connect()
+        conn.execute('UPDATE drink_orders SET order_time = ? WHERE session_id = ? AND item_type = \'joystick\'', (past, session_id))
+        conn.commit()
+        conn.close()
+        total = db.get_station_drink_total(sid, session_id)
+        self.assertAlmostEqual(total, 2000.0, delta=1.0)
+        finalized = db.finalize_joystick_charges(session_id, datetime.now())
+        self.assertAlmostEqual(finalized, 2000.0, delta=1.0)
+        total2 = db.get_station_drink_total(sid, session_id)
+        self.assertAlmostEqual(total2, finalized, delta=1.0)
+    def test_money_writes_are_thousands(self) -> None:
+        from app.core.money import round_to_thousand
+        db.add_click(134500)
+        self.assertEqual(db.click_total_for_cash_period(), 135000.0)
+        db.add_expense('Test', 2500, 'cash')
+        self.assertEqual(db.expense_total_for_day(), 3000.0)
+        did = db.add_debtor('Ali', '', 7499)
+        rows = db.list_debtors('Ali')
+        self.assertEqual(float(rows[0]['amount']), 7000.0)
+        self.assertEqual(round_to_thousand(7499), 7000.0)
+        self.assertEqual(did, rows[0]['id'])
+    def test_safe_expense_reduces_ceyf_not_kassa(self) -> None:
+        before = db.get_safe_balance()
+        db.add_to_safe_balance(10000)
+        db.add_expense('Test ceyf', 3000, 'safe', 'audit')
+        self.assertAlmostEqual(db.get_safe_balance(), before + 7000, delta=0.01)
+        start, end = db.cash_period_bounds()
+        cash_exp = db.expense_total_between(start, end, wallet='cash')
+        safe_exp = db.expense_total_between(start, end, wallet='safe')
+        self.assertGreaterEqual(safe_exp, 3000.0)
+        self.assertEqual(db.expense_total_between(start, end, wallet='cash'), cash_exp)
+    def test_round_to_thousand(self) -> None:
+        from app.core.money import round_to_thousand
+        self.assertEqual(round_to_thousand(12783), 13000)
+        self.assertEqual(round_to_thousand(27421), 27000)
+        self.assertEqual(round_to_thousand(500), 1000)
+        self.assertEqual(round_to_thousand(499), 0)
+        self.assertEqual(round_to_thousand(1500), 2000)
+        self.assertEqual(round_to_thousand(1499), 1000)
+class ServiceLayerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._db_path = Path(self._tmpdir.name) / 'test_services.db'
+        self._patch = patch.object(db, 'DB_PATH', self._db_path)
+        self._patch.start()
+        db.init_db()
+        from app.core.container import build_container
+        self.container = build_container()
+    def tearDown(self) -> None:
+        self._patch.stop()
+        self._tmpdir.cleanup()
+    def test_container_builds(self) -> None:
+        self.assertGreater(len(self.container.stations.list_station_ids()), 0)
+    def test_finance_balance_summary(self) -> None:
+        bal = self.container.finance.balance_summary()
+        self.assertIn('total', bal)
+        self.assertIn('safe', bal)
+        self.assertIn('cash', bal)
+    def test_inventory_products_list(self) -> None:
+        products = self.container.inventory.all_products_for_display()
+        self.assertIsInstance(products, list)
+if __name__ == '__main__':
+    unittest.main()

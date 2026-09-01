@@ -1,0 +1,32 @@
+"""PS billing regression — VIP kechasi 7000 chiqmasligi kerak."""
+from datetime import datetime
+from app.core.money import round_to_thousand
+from app.core.ps_billing import billable_seconds, playstation_amount, sanitize_hourly_rate, time_amount
+def test_vip_overnight_never_seven_thousand():
+    start = datetime(2026, 8, 1, 19, 47, 0)
+    end = datetime(2026, 8, 2, 2, 25, 0)
+    sec = billable_seconds(is_vip=True, start=start, end=end, booked_seconds=0)
+    assert sec == 23880
+    assert billable_seconds(is_vip=True, start=start, end=end) == 23880
+    amt = time_amount(23000, sec)
+    assert round_to_thousand(amt) == 153000
+    assert round_to_thousand(amt) != 7000
+def test_timed_prepaid_full_booked():
+    start = datetime(2026, 8, 2, 10, 0, 0)
+    end = datetime(2026, 8, 2, 10, 21, 0)
+    sec = billable_seconds(is_vip=False, start=start, end=end, booked_seconds=7200)
+    assert sec == 7200
+    assert round_to_thousand(time_amount(20000, sec)) == 40000
+def test_sanitize_typo_rate():
+    assert sanitize_hourly_rate(150000, 18000) == 15000
+def test_playstation_amount_locked():
+    start = datetime(2026, 8, 1, 19, 47, 0)
+    end = datetime(2026, 8, 2, 2, 25, 0)
+    amt = playstation_amount('STOL-11', is_vip=True, start=start, end=end, locked_rate=23000)
+    assert abs(amt - 152566.666) < 1
+if __name__ == '__main__':
+    test_vip_overnight_never_seven_thousand()
+    test_timed_prepaid_full_booked()
+    test_sanitize_typo_rate()
+    test_playstation_amount_locked()
+    print('ps_billing OK')

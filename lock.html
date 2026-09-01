@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            font-family: Consolas, "Courier New", monospace;
+        }
+        body {
+            background-color: #000000;
+            background-image: none;
+        }
+        .overlay {
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(ellipse 85% 75% at 50% 48%, rgba(10, 10, 18, 0.12) 0%, rgba(0, 0, 0, 0.45) 100%);
+            pointer-events: none;
+        }
+        .clock {
+            position: absolute;
+            top: 12px;
+            right: 16px;
+            z-index: 2;
+            font-size: clamp(28px, 5.5vw, 52px);
+            font-weight: 700;
+            color: #00e5ff;
+            text-shadow:
+                0 0 20px rgba(0, 229, 255, 0.75),
+                0 4px 16px rgba(0, 0, 0, 1);
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 0.06em;
+        }
+    </style>
+</head>
+<body>
+    <div class="overlay"></div>
+    <div class="clock" id="clock">00:00:00</div>
+    <script>
+        function updateClock() {
+            var now = new Date();
+            var h = String(now.getHours()).padStart(2, '0');
+            var m = String(now.getMinutes()).padStart(2, '0');
+            var s = String(now.getSeconds()).padStart(2, '0');
+            document.getElementById('clock').innerText = h + ':' + m + ':' + s;
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+    </script>
+</body>
+</html>

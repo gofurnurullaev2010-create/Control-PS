@@ -1,0 +1,1 @@
+"""Domain contracts — service qatlami orqali ishlatiladi."""
