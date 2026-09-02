@@ -129,7 +129,7 @@ class DatabaseCompatTests(unittest.TestCase):
         self.assertEqual(float(db.get_session_buyurtma_total(sid, session_id)), 12000.0)
         now = datetime.now()
         start = (now - timedelta(hours=1)).isoformat(timespec='seconds')
-        db.end_session_row(session_id, 60, 38000)
+        db.end_session_row(session_id, 60, 26000)
         conn = db._connect()
         conn.execute('UPDATE sessions SET end_time = ? WHERE id = ?', (now.isoformat(timespec='seconds'), session_id))
         conn.commit()
@@ -138,6 +138,21 @@ class DatabaseCompatTests(unittest.TestCase):
         self.assertEqual(float(report.get('buyurtma_total') or 0), 12000.0)
         self.assertAlmostEqual(float(report.get('total') or 0), 26000.0, delta=1.0)
         self.assertAlmostEqual(float(report['total']), float(report['session_total']) + float(report['drink_total']) + float(report['market_total']) + float(report['joystick_total']), delta=0.01)
+        split = db.revenue_split_for_day(db.current_business_date().isoformat())
+        self.assertGreaterEqual(float(split.get('total') or 0), 26000.0)
+        rows = db.sessions_breakdown_for_day(db.current_business_date().isoformat())
+        mine = next(r for r in rows if int(r.get('id') or 0) == session_id)
+        self.assertAlmostEqual(float(mine.get('session_revenue') or 0), 26000.0, delta=1.0)
+        self.assertAlmostEqual(float(mine.get('buyurtma_revenue') or 0), 12000.0, delta=1.0)
+    def test_cancel_buyurtma_keeps_closed_session_revenue(self) -> None:
+        sid = db.list_station_ids()[0]
+        session_id = db.start_session_row(sid, total_seconds=3600, is_vip=True)
+        oid = db.add_session_buyurtma(sid, session_id, 12000, 'Pizza')
+        db.end_session_row(session_id, 60, 26000)
+        self.assertTrue(db.cancel_order_and_return_stock(oid))
+        row = db.get_session_by_id(session_id)
+        self.assertAlmostEqual(float(row['revenue'] or 0), 26000.0, delta=0.01)
+        self.assertEqual(float(db.get_session_buyurtma_total(sid, session_id)), 0.0)
     def test_vidaa_token_repair_sets_expiry(self) -> None:
         import json
         from app.tv.vidaa_platform import _repair_token_expiry

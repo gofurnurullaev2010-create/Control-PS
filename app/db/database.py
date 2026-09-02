@@ -691,7 +691,7 @@ def revenue_total_for_day(day: str) -> float:
 def revenue_total_all_time() -> float:
     """Dastur ochilgandan beri barcha yakunlangan tushum (active seanslarsiz)."""
     conn = _connect()
-    ended = conn.execute('\n        SELECT\n            COALESCE(s.revenue, 0) AS revenue,\n            COALESCE((\n                SELECT SUM(d.price) FROM drink_orders d WHERE d.session_id = s.id\n            ), 0) AS drink_rev\n        FROM sessions s\n        WHERE s.end_time IS NOT NULL\n        ').fetchall()
+    ended = conn.execute('\n        SELECT\n            COALESCE(s.revenue, 0) AS revenue,\n            COALESCE((\n                SELECT SUM(d.price) FROM drink_orders d WHERE d.session_id = s.id\n                  AND lower(COALESCE(d.item_type, \'drink\')) != \'buyurtma\'\n            ), 0) AS drink_rev\n        FROM sessions s\n        WHERE s.end_time IS NOT NULL\n        ').fetchall()
     session_time = 0.0
     for r in ended:
         session_time += max(0.0, float(r['revenue'] or 0) - float(r['drink_rev'] or 0))
@@ -712,7 +712,7 @@ def sessions_breakdown_for_day(day: str) -> List[dict[str, Any]]:
         joy = float(d.get('joystick_revenue') or 0)
         buy = float(d.get('buyurtma_revenue') or 0)
         total_rev = float(d.get('revenue') or 0)
-        d['session_revenue'] = max(0.0, total_rev - goods - joy - buy)
+        d['session_revenue'] = max(0.0, total_rev - goods - joy)
         d['joystick_revenue'] = joy
         d['buyurtma_revenue'] = buy
         out.append(d)
@@ -795,7 +795,7 @@ def revenue_split_for_day(day: str) -> dict[str, float]:
     """Kun bo\'yicha yakunlangan tushumni 2 qismga ajratib qaytarish.\n\n    Active seanslar qo\'shilmaydi. Shu sabab YANGILASH bosilganda raqam o\'z-o\'zidan\n    o\'zgarmaydi; seans STOP qilingandan keyingina kunlik hisobga qo\'shiladi.\n    Kun chegarasi admin panelidagi KUN sozlamasiga qarab (masalan 06:00–05:59).\n    """
     start, end = business_day_bounds(day)
     conn = _connect()
-    ended = conn.execute('\n        SELECT\n            s.id,\n            COALESCE(s.revenue, 0) AS revenue,\n            COALESCE((\n                SELECT SUM(d.price) FROM drink_orders d WHERE d.session_id = s.id\n            ), 0) AS drink_rev\n        FROM sessions s\n        WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n        ', (start, end)).fetchall()
+    ended = conn.execute('\n        SELECT\n            s.id,\n            COALESCE(s.revenue, 0) AS revenue,\n            COALESCE((\n                SELECT SUM(d.price) FROM drink_orders d WHERE d.session_id = s.id\n                  AND lower(COALESCE(d.item_type, \'drink\')) != \'buyurtma\'\n            ), 0) AS drink_rev\n        FROM sessions s\n        WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n        ', (start, end)).fetchall()
     ended_session_time = 0.0
     for r in ended:
         ended_session_time += max(0.0, float(r['revenue'] or 0) - float(r['drink_rev'] or 0))
@@ -1165,8 +1165,6 @@ def cancel_order_and_return_stock(order_id: int) -> bool:
         restocked = False
         if item_type == 'buyurtma':
             conn.execute('DELETE FROM drink_orders WHERE id = ?', (int(order_id),))
-            if session_id is not None:
-                conn.execute('\n                    UPDATE sessions\n                    SET revenue = MAX(0, COALESCE(revenue, 0) - ?)\n                    WHERE id = ? AND end_time IS NOT NULL\n                    ', (price, int(session_id)))
             conn.commit()
             return True
         if item_type == 'drink':
@@ -1348,7 +1346,7 @@ def operator_report_between(start_iso: str, end_iso: str) -> dict[str, Any]:
     """Berilgan vaqt oralig\'i uchun to\'liq hisobot (operator topshirig\'i uchun).\n\n    Qaytaradi: jami daromad, seans/ichimlik/market/jostik bo\'yicha summalar,\n    hamda ichimliklar va market mahsulotlari ro\'yxati (nom, dona, summa).\n\n    Tovarlar: faqat yopilgan stollar + BAR (DOKON) — ochiq stol buyurtmasi\n    STOP qilinmaguncha Satilg\'an / Kassa jabıwga kirmaydi.\n    """
     conn = _connect()
     try:
-        ended = conn.execute('\n            SELECT\n                COALESCE(s.revenue, 0) AS revenue,\n                COALESCE((\n                    SELECT SUM(d.price) FROM drink_orders d WHERE d.session_id = s.id\n                ), 0) AS linked\n            FROM sessions s\n            WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n            ', (start_iso, end_iso)).fetchall()
+        ended = conn.execute('\n            SELECT\n                COALESCE(s.revenue, 0) AS revenue,\n                COALESCE((\n                    SELECT SUM(d.price) FROM drink_orders d WHERE d.session_id = s.id\n                      AND lower(COALESCE(d.item_type, \'drink\')) != \'buyurtma\'\n                ), 0) AS linked\n            FROM sessions s\n            WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n            ', (start_iso, end_iso)).fetchall()
         session_total = 0.0
         for r in ended:
             session_total += max(0.0, float(r['revenue'] or 0) - float(r['linked'] or 0))

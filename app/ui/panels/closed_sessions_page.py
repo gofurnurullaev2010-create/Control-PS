@@ -278,8 +278,10 @@ class ClosedSessionsPage(QWidget):
         open_t = _hhmm(str(full.get('start_time') or ''))
         played = _played(str(full.get('start_time') or ''), str(full.get('end_time') or ''), int(full.get('duration_minutes') or 0))
         goods, joystick = db.split_session_charges(station, sid)
+        buyurtma = float(db.get_session_buyurtma_total(station, sid) or 0)
         total = float(full.get('revenue') or 0)
         time_sum = max(0.0, total - goods)
+        jami = total + buyurtma
         joys = 2 + int(db.count_joystick_charges(sid))
         note = str(full.get('note') or '')
         head = _card()
@@ -294,7 +296,7 @@ class ClosedSessionsPage(QWidget):
         b_note.clicked.connect(lambda: self._edit_note(sid, note))
         b_debt = QPushButton('💰  Qariz jaziw')
         b_debt.setCursor(Qt.CursorShape.PointingHandCursor)
-        b_debt.clicked.connect(lambda: self._add_debt_from_session(name, total))
+        b_debt.clicked.connect(lambda: self._add_debt_from_session(name, jami))
         for b in [b_note, b_debt]:
             b.setStyleSheet('QPushButton { background: #F3F4F6; border: 1px solid #E5E7EB; border-radius: 22px; padding: 10px 14px; font-weight: 800; }')
             btns.addWidget(b)
@@ -343,6 +345,8 @@ class ClosedSessionsPage(QWidget):
             for o in goods_orders:
                 line = QHBoxLayout()
                 nm = str(o.get('name') or '')
+                if str(o.get('item_type') or '') == 'buyurtma':
+                    nm = f'Buyurtma: {nm}'
                 cnt = int(o.get('count') or 0)
                 tot = float(o.get('total') or 0)
                 line.addWidget(QLabel(f'{nm} × {cnt}'))
@@ -355,7 +359,11 @@ class ClosedSessionsPage(QWidget):
         tot_card = _card()
         tl = QVBoxLayout(tot_card)
         tl.setContentsMargins(18, 14, 18, 14)
-        for label, value, color in [('Tovarlar summasi', _fmt(goods), '#DC2626'), ('Uliwmaliq summa', _fmt(total), '#16A34A')]:
+        tot_rows = [('Tovarlar summasi', _fmt(goods), '#DC2626')]
+        if buyurtma > 0:
+            tot_rows.append(('Buyurtma (kassaga kirmaydi)', _fmt(buyurtma), '#D97706'))
+        tot_rows.append(('Uliwmaliq summa', _fmt(jami), '#16A34A'))
+        for label, value, color in tot_rows:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
             val = QLabel(value)
@@ -396,7 +404,8 @@ class ClosedSessionsPage(QWidget):
             db.set_session_note(session_id, edit.text())
             sess = db.get_session_by_id(session_id)
             if sess:
-                sess['drink_revenue'] = db.get_station_drink_total(str(sess.get('station_id') or ''), session_id)
+                goods, _joy = db.split_session_charges(str(sess.get('station_id') or ''), session_id)
+                sess['drink_revenue'] = goods
                 self._show_session(sess)
             self.reload()
     def _add_debt_from_session(self, station_label: str, amount: float) -> None:

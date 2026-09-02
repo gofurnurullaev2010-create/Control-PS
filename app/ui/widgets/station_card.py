@@ -323,7 +323,11 @@ class StationCard(QFrame):
                 except Exception:
                     drink_total = self._port.drink_total(self.station_id, self._session_db_id)
                     joystick_total = self._port.joystick_total(self.station_id, self._session_db_id)
-                    goods_total = max(0.0, float(drink_total) - float(joystick_total))
+                    try:
+                        buy = float(_db.get_session_buyurtma_total(self.station_id, self._session_db_id) or 0)
+                    except Exception:
+                        buy = 0.0
+                    goods_total = max(0.0, float(drink_total) - float(joystick_total) - buy)
             extra = self._extra_amount()
             from app.core.money import round_to_thousand
             ps_show = round_to_thousand(ps_amount + joystick_total + extra)
@@ -1053,7 +1057,11 @@ class StationCard(QFrame):
             is_btn = obj in skip or isinstance(obj, QPushButton)
             try:
                 if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton and (not is_btn):
-                    self._preview_click_timer.start(280)
+                    try:
+                        delay = int(QApplication.doubleClickInterval()) + 50
+                    except Exception:
+                        delay = 400
+                    self._preview_click_timer.start(max(400, delay))
                 elif event.type() == QEvent.Type.MouseButtonDblClick:
                     if is_btn:
                         return False
@@ -1188,7 +1196,11 @@ class StationCard(QFrame):
             except Exception:
                 drink_total = self._port.drink_total(self.station_id, self._session_db_id)
                 joystick_total = self._port.joystick_total(self.station_id, self._session_db_id)
-                goods_total = max(0.0, float(drink_total) - float(joystick_total))
+                try:
+                    buy = float(_db.get_session_buyurtma_total(self.station_id, self._session_db_id) or 0)
+                except Exception:
+                    buy = 0.0
+                goods_total = max(0.0, float(drink_total) - float(joystick_total) - buy)
         from app.core.money import round_to_thousand
         jami = round_to_thousand(t + ex + goods_total + joystick_total)
         self._vip_sum.setText(f'💰 {jami:,.0f} so\'m  (Vaqt {round_to_thousand(t + joystick_total):,.0f} + Ichimlik {round_to_thousand(goods_total):,.0f} + Qo\'shimcha {round_to_thousand(ex):,.0f})')

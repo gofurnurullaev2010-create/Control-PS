@@ -12,9 +12,11 @@ def sanitize_hourly_rate(rate: Any, fallback: float=0.0) -> float:
         r = 0.0
     fb = max(0.0, float(fallback or 0))
     if r > _MAX_HOURLY:
-        if 1000 <= r / 10.0 <= _MAX_HOURLY:
-                r = r / 10.0
-                r = fb
+        scaled = r / 10.0
+        if 1000 <= scaled <= _MAX_HOURLY:
+            r = scaled
+        else:
+            r = fb
     return r
 def parse_session_dt(value: Any) -> Optional[datetime]:
     if value is None:
