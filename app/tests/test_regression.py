@@ -79,6 +79,45 @@ class DatabaseCompatTests(unittest.TestCase):
         safe_exp = db.expense_total_between(start, end, wallet='safe')
         self.assertGreaterEqual(safe_exp, 3000.0)
         self.assertEqual(db.expense_total_between(start, end, wallet='cash'), cash_exp)
+    def test_joystick_goes_to_playstation_not_goods(self) -> None:
+        from datetime import datetime, timedelta
+        sid = db.list_station_ids()[0]
+        session_id = db.start_session_row(sid, total_seconds=5400, is_vip=True)
+        db.add_joystick_charge(sid, 3000, session_id)
+        past = (datetime.now() - timedelta(minutes=30)).isoformat(timespec='seconds')
+        conn = db._connect()
+        conn.execute('UPDATE drink_orders SET order_time = ? WHERE session_id = ? AND item_type = \'joystick\'', (past, session_id))
+        conn.commit()
+        conn.close()
+        goods, joy = db.split_session_charges(sid, session_id)
+        self.assertAlmostEqual(joy, 2000.0, delta=1.0)
+        self.assertEqual(goods, 0.0)
+        db.set_drink_price('Cola', 0.5, 8000, quantity=10)
+        db.add_drink_order(sid, 'Cola', 0.5, 8000, session_id)
+        goods2, joy2 = db.split_session_charges(sid, session_id)
+        self.assertEqual(goods2, 8000.0)
+        self.assertAlmostEqual(joy2, 2000.0, delta=1.0)
+        items = db.get_session_orders_grouped(session_id, sid)
+        visible = [str(i.get('name') or '') for i in items if str(i.get('item_type') or '') != 'joystick']
+        self.assertIn('Cola', visible)
+        self.assertTrue(all(n != 'Jostik' for n in visible))
+    def test_new_session_does_not_show_walkin_orders(self) -> None:
+        sid = db.list_station_ids()[0]
+        db.set_drink_price('Fanta', 1.0, 7000, quantity=10)
+        db.add_drink_order(sid, 'Fanta', 1.0, 7000, None)
+        session_id = db.start_session_row(sid, total_seconds=0, is_vip=True)
+        items = db.get_session_orders_grouped(session_id, sid)
+        self.assertEqual(items, [])
+        goods, joy = db.split_session_charges(sid, session_id)
+        self.assertEqual(goods, 0.0)
+        self.assertEqual(joy, 0.0)
+        walkin = db.get_session_orders_grouped(None, sid)
+        self.assertTrue(any(str(i.get('name')) == 'Fanta' for i in walkin))
+    def test_receipt_hides_joystick_rows(self) -> None:
+        from app.ui.dialogs.customer_display import receipt_display_items
+        products, buy = receipt_display_items([{'name': 'Cola', 'item_type': 'drink'}, {'name': 'Jostik', 'item_type': 'joystick'}, {'name': 'X', 'item_type': 'buyurtma'}])
+        self.assertEqual([p['name'] for p in products], ['Cola'])
+        self.assertEqual([b['name'] for b in buy], ['X'])
     def test_round_to_thousand(self) -> None:
         from app.core.money import round_to_thousand
         self.assertEqual(round_to_thousand(12783), 13000)

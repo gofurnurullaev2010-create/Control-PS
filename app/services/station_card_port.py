@@ -12,6 +12,8 @@ class StationCardPort(Protocol):
         return
     def drink_total(self, station_id: str, session_id: Optional[int]) -> float:
         return
+    def joystick_total(self, station_id: str, session_id: Optional[int]) -> float:
+        return
     def end_session(self, session_id: int, minutes: int, revenue: float) -> None:
         return
     def transfer_session(self, session_id: int, new_station_id: str) -> bool:
@@ -44,6 +46,8 @@ class LegacyStationCardPort:
         db.set_tv_volume(station_id, volume)
     def drink_total(self, station_id: str, session_id: Optional[int]) -> float:
         return float(db.get_station_drink_total(station_id, session_id))
+    def joystick_total(self, station_id: str, session_id: Optional[int]) -> float:
+        return float(db.get_session_joystick_total(station_id, session_id))
     def end_session(self, session_id: int, minutes: int, revenue: float) -> None:
         db.end_session_row(session_id, minutes, revenue)
     def transfer_session(self, session_id: int, new_station_id: str) -> bool:
@@ -78,6 +82,8 @@ class ServiceStationCardPort:
         self._c.stations.set_volume(station_id, volume)
     def drink_total(self, station_id: str, session_id: Optional[int]) -> float:
         return self._c.sessions.drink_total(station_id, session_id)
+    def joystick_total(self, station_id: str, session_id: Optional[int]) -> float:
+        return self._c.sessions.joystick_total(station_id, session_id)
     def end_session(self, session_id: int, minutes: int, revenue: float) -> None:
         self._c.sessions.end(session_id, minutes, revenue)
     def transfer_session(self, session_id: int, new_station_id: str) -> bool:

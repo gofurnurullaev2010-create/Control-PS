@@ -7,6 +7,25 @@ from PyQt6.QtWidgets import QApplication, QAbstractItemView, QComboBox, QDialog,
 import database as db
 from app.ui.dialogs.colors import ACCENT, ACCENT_HOVER, BG_CARD, BG_HEADER, BG_MAIN, BORDER_COLOR, COL_BLUE, COL_GREEN, COL_RED, GOLD_COLOR, STATUS_FREE, TEXT_PRIMARY, TEXT_SECONDARY
 logger = logging.getLogger(__name__)
+_RECEIPT_HIDDEN_TYPES = frozenset({'joystick', 'jostik'})
+
+def receipt_display_items(order_items) -> tuple[list, list]:
+    """Chekda ko\'rinadigan tovarlar. Jostik Playstation summasiga kiradi — ro\'yxatda yo\'q."""
+    products: list = []
+    buyurtma: list = []
+    for it in order_items or []:
+        kind = str(it.get('item_type') or '').strip().lower()
+        if kind in _RECEIPT_HIDDEN_TYPES:
+            continue
+        name = str(it.get('name') or '').strip()
+        if not name:
+            continue
+        if kind == 'buyurtma':
+            buyurtma.append(it)
+        else:
+            products.append(it)
+    return (products, buyurtma)
+
 class CustomerDisplayWindow(QWidget):
     """Ikkinchi monitor uchun mijozlarga ko\'rinadigan stollar holati paneli."""
     def __init__(self) -> None:
@@ -179,6 +198,9 @@ class CustomerDisplayWindow(QWidget):
             self.show_on_customer_screen(force=True)
         except Exception:
             pass
+        self._clear_receipt_items()
+        self._receipt_body.setText('')
+        self._receipt_body.setVisible(False)
         title = str(payload.get('title') or 'STOP — hisob')
         station = str(payload.get('station') or '')
         body = str(payload.get('body_html') or '')
@@ -210,14 +232,8 @@ class CustomerDisplayWindow(QWidget):
             self._receipt_items_scroll.setMaximumHeight(items_h)
         except Exception:
             pass
-        while self._receipt_items_lay.count():
-            item = self._receipt_items_lay.takeAt(0)
-            wdg = item.widget()
-            if wdg is not None:
-                wdg.deleteLater()
         order_items = payload.get('order_items') or []
-        buyurtma_items = [it for it in order_items if str(it.get('item_type') or '') == 'buyurtma']
-        product_items = [it for it in order_items if str(it.get('item_type') or '') != 'buyurtma']
+        product_items, buyurtma_items = receipt_display_items(order_items)
         if product_items:
             head = QLabel('Olingan mahsulotlar:')
             head.setStyleSheet(f'color: {TEXT_PRIMARY}; font-size: 15px; font-weight: 800;')
@@ -230,7 +246,7 @@ class CustomerDisplayWindow(QWidget):
             self._receipt_items_lay.addWidget(head_b)
             for it in buyurtma_items:
                 self._receipt_items_lay.addWidget(self._make_receipt_item_row(it))
-        if order_items:
+        if product_items or buyurtma_items:
             goods = QLabel(f'Mahsulotlar jami: {drink_total:,.0f} so\'m')
             goods.setStyleSheet(f'color: {TEXT_SECONDARY}; font-size: 14px; font-weight: 700;')
             self._receipt_items_lay.addWidget(goods)
@@ -318,9 +334,24 @@ class CustomerDisplayWindow(QWidget):
         info.setWordWrap(True)
         lay.addWidget(info, 1)
         return row
+    def _clear_receipt_items(self) -> None:
+        """Chek satrlarini butunlay yangi host bilan almashtiradi.
+
+        takeAt()+deleteLater() eski satrlarni event-loop gacha ko\'rinib qoldirardi:
+        yangi chekning jami summasi to\'g\'ri, lekin oldingi stolning ichimlik/market
+        qatorlari VIP yakunida ham chiqib ketardi.
+        """
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 4, 0, 4)
+        lay.setSpacing(6)
+        self._receipt_items_scroll.setWidget(host)
+        self._receipt_items_host = host
+        self._receipt_items_lay = lay
     def hide_session_receipt(self) -> None:
         self._receipt_overlay.hide()
         self._receipt_timer.stop()
+        self._clear_receipt_items()
     def show_zakaz_number(self, n: int, duration_ms: int=2000) -> None:
         """QR ЗАКАЗ — monitorda katta raqam (default 2 soniya)."""
         try:
@@ -339,8 +370,7 @@ class CustomerDisplayWindow(QWidget):
     def update_from_cards(self, cards: dict[str, object]) -> None:
         self._live_cards = cards
         if self._receipt_overlay.isVisible() or self._zakaz_overlay.isVisible():
-            if False:
-                pass
+            return
         ids = list(cards.keys())
         if set(ids) != set(self._cards.keys()):
             self._rebuild(ids)
@@ -377,13 +407,11 @@ class CustomerDisplayWindow(QWidget):
             elapsed = int(getattr(card, '_elapsed', 0) or 0)
             time_rev = float(card._time_revenue_proportional(sid, elapsed, start_dt, lock_rate_at_start=True) if hasattr(card, '_time_revenue_proportional') else 0)
         order_items = []
-        drink_total = 0.0
+        goods_total = 0.0
+        joystick_total = 0.0
         if session_db_id is not None:
             try:
-                drink_total = float(db.get_station_drink_total(sid, session_db_id) or 0)
-            except Exception:
-                drink_total = 0.0
-            try:
+                goods_total, joystick_total = db.split_session_charges(sid, session_db_id)
                 grouped = db.get_session_orders_grouped(session_db_id, sid)
                 for it in grouped:
                     name = it.get('name', '')
@@ -407,11 +435,16 @@ class CustomerDisplayWindow(QWidget):
                                 img = None
                         order_items.append({'name': display_name, 'size': size.strip(), 'count': cnt, 'unit': unit, 'total': line_total, 'image': img, 'item_type': str(it.get('item_type') or ''), 'note': str(name) if is_buyurtma else ''})
             except Exception:
+                logging.getLogger('customer').exception('Chek tuzilmadi: %s', sid)
                 order_items = []
-        total = round_to_thousand(time_rev) + round_to_thousand(extra + drink_total)
+                goods_total = 0.0
+                joystick_total = 0.0
+        ps_show = round_to_thousand(time_rev + joystick_total)
+        goods_show = round_to_thousand(extra + goods_total)
+        total = ps_show + goods_show
         label_vip = ' (VIP)' if was_vip else ''
         station_title = f'{card.display_name()}{label_vip}'
-        return {'title': 'Joriy hisob', 'station': station_title, 'body_html': '', 'total': total, 'time_rev': round_to_thousand(time_rev), 'drink_total': drink_total, 'extra': extra, 'order_items': order_items, 'duration_ms': 25000, 'preview': True}
+        return {'title': 'Joriy hisob', 'station': station_title, 'body_html': '', 'total': total, 'time_rev': ps_show, 'drink_total': goods_total, 'joystick_total': joystick_total, 'extra': extra, 'order_items': order_items, 'duration_ms': 25000, 'preview': True}
     def _rebuild(self, ids: list[str]) -> None:
         while self._grid.count():
             item = self._grid.takeAt(0)
@@ -503,29 +536,28 @@ class CustomerDisplayWindow(QWidget):
         frame.style().polish(frame)
         if not busy:
             return
+        started = '—'
+        if card._session_start_dt is not None:
+            started = card._session_start_dt.strftime('%H:%M')
+        played_seconds = card._elapsed if card._vip_open else min(card._elapsed, card._total_seconds)
+        if hasattr(card, '_ps_live_amount'):
+            ps_amount = float(card._ps_live_amount())
         else:
-            started = '—'
-            if card._session_start_dt is not None:
-                started = card._session_start_dt.strftime('%H:%M')
-            played_seconds = card._elapsed if card._vip_open else min(card._elapsed, card._total_seconds)
-            if hasattr(card, '_ps_live_amount'):
-                ps_amount = float(card._ps_live_amount())
-            else:
-                ps_seconds = int(card._elapsed or 0)
-                ps_amount = card._time_revenue_proportional(sid, ps_seconds, card._session_start_dt, lock_rate_at_start=True)
-            goods = 0.0
-            if card._session_db_id is not None:
-                try:
-                    goods = db.get_station_drink_total(sid, card._session_db_id)
-                except Exception:
-                    goods = 0.0
-            extra = float(card._extra_amount()) if hasattr(card, '_extra_amount') else 0.0
-            from app.core.money import round_to_thousand
-            ps_show = round_to_thousand(ps_amount)
-            goods_show = round_to_thousand(goods + extra)
-            total = ps_show + goods_show
-            labels['started'].setText(started)
-            labels['played'].setText(card._format_seconds(played_seconds))
-            labels['ps'].setText(f'{ps_show:,.0f} so\'m')
-            labels['goods'].setText(f'{goods_show:,.0f} so\'m')
-            labels['total'].setText(f'{total:,.0f}')
+            ps_seconds = int(card._elapsed or 0)
+            ps_amount = card._time_revenue_proportional(sid, ps_seconds, card._session_start_dt, lock_rate_at_start=True)
+        goods, joystick = (0.0, 0.0)
+        if card._session_db_id is not None:
+            try:
+                goods, joystick = db.split_session_charges(sid, card._session_db_id)
+            except Exception:
+                goods, joystick = (0.0, 0.0)
+        extra = float(card._extra_amount()) if hasattr(card, '_extra_amount') else 0.0
+        from app.core.money import round_to_thousand
+        ps_show = round_to_thousand(ps_amount + joystick)
+        goods_show = round_to_thousand(goods + extra)
+        total = ps_show + goods_show
+        labels['started'].setText(started)
+        labels['played'].setText(card._format_seconds(played_seconds))
+        labels['ps'].setText(f'{ps_show:,.0f} so\'m')
+        labels['goods'].setText(f'{goods_show:,.0f} so\'m')
+        labels['total'].setText(f'{total:,.0f}')

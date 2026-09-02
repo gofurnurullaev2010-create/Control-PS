@@ -95,8 +95,8 @@ class SessionGoodsEditDialog(QDialog):
             for order in orders:
                 self._list_lay.addWidget(self._make_row(order))
         self._list_lay.addStretch(1)
-        total = float(db.get_station_drink_total(self.station_id, self.session_id))
-        self._total_lbl.setText(f'Tovarlar jami: {_fmt(total)} so\'m')
+        goods, _joy = db.split_session_charges(self.station_id, self.session_id)
+        self._total_lbl.setText(f'Tovarlar jami: {_fmt(goods)} so\'m')
     def _make_row(self, order: dict) -> QFrame:
         item_type = str(order.get('item_type') or '')
         is_market = item_type == 'market'
@@ -277,7 +277,7 @@ class ClosedSessionsPage(QWidget):
         close_t = _hhmm(str(full.get('end_time') or ''))
         open_t = _hhmm(str(full.get('start_time') or ''))
         played = _played(str(full.get('start_time') or ''), str(full.get('end_time') or ''), int(full.get('duration_minutes') or 0))
-        goods = float(db.get_station_drink_total(station, sid))
+        goods, joystick = db.split_session_charges(station, sid)
         total = float(full.get('revenue') or 0)
         time_sum = max(0.0, total - goods)
         joys = 2 + int(db.count_joystick_charges(sid))

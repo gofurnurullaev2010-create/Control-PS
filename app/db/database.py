@@ -797,10 +797,11 @@ def revenue_split_for_day(day: str) -> dict[str, float]:
     ended_session_time = 0.0
     for r in ended:
         ended_session_time += max(0.0, float(r['revenue'] or 0) - float(r['drink_rev'] or 0))
-    ended_drinks = float(conn.execute('\n            SELECT COALESCE(SUM(d.price), 0)\n            FROM drink_orders d\n            JOIN sessions s ON d.session_id = s.id\n            WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n              AND lower(COALESCE(d.item_type, \'drink\')) != \'buyurtma\'\n            ', (start, end)).fetchone()[0] or 0)
-    standalone_drinks = float(conn.execute('\n            SELECT COALESCE(SUM(price), 0)\n            FROM drink_orders\n            WHERE session_id IS NULL AND order_time >= ? AND order_time < ?\n              AND lower(COALESCE(item_type, \'drink\')) != \'buyurtma\'\n            ', (start, end)).fetchone()[0] or 0)
+    joystick_linked = float(conn.execute('\n            SELECT COALESCE(SUM(d.price), 0)\n            FROM drink_orders d\n            JOIN sessions s ON d.session_id = s.id\n            WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n              AND lower(COALESCE(d.item_type, \'\')) = \'joystick\'\n            ', (start, end)).fetchone()[0] or 0)
+    ended_drinks = float(conn.execute('\n            SELECT COALESCE(SUM(d.price), 0)\n            FROM drink_orders d\n            JOIN sessions s ON d.session_id = s.id\n            WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n              AND lower(COALESCE(d.item_type, \'drink\')) IN (\'drink\', \'market\')\n            ', (start, end)).fetchone()[0] or 0)
+    standalone_drinks = float(conn.execute('\n            SELECT COALESCE(SUM(price), 0)\n            FROM drink_orders\n            WHERE session_id IS NULL AND order_time >= ? AND order_time < ?\n              AND lower(COALESCE(item_type, \'drink\')) IN (\'drink\', \'market\')\n            ', (start, end)).fetchone()[0] or 0)
     conn.close()
-    session_total = float(ended_session_time)
+    session_total = float(ended_session_time) + float(joystick_linked)
     drink_total = float(ended_drinks + standalone_drinks)
     total = float(session_total + drink_total)
     return {'total': total, 'session_total': session_total, 'drink_total': drink_total}
@@ -1038,10 +1039,10 @@ def get_session_orders_grouped(session_id: Optional[int], station_id: Optional[s
     """Seansdagi (yoki seanssiz, stol bo\'yicha) buyurtmalarni nom+narx bo\'yicha\n    guruhlab, soni va jami summasi bilan qaytaradi.\n\n    Har bir element: {name, volume, price, item_type, count, total}\n    Jostiklar faol seansda vaqt bo\'yicha hisoblanadi.\n    """
     conn = _connect()
     session_active = False
-    if session_id:
+    if session_id is not None:
         srow = conn.execute('SELECT end_time FROM sessions WHERE id = ?', (int(session_id),)).fetchone()
         session_active = bool(srow) and srow['end_time'] is None
-        rows = conn.execute('\n            SELECT id, drink_name AS name, volume, price, item_type, order_time\n            FROM drink_orders\n            WHERE session_id = ?\n            ORDER BY item_type DESC, drink_name, id\n            ', (session_id,)).fetchall()
+        rows = conn.execute('\n            SELECT id, drink_name AS name, volume, price, item_type, order_time\n            FROM drink_orders\n            WHERE session_id = ?\n            ORDER BY item_type DESC, drink_name, id\n            ', (int(session_id),)).fetchall()
     else:
         if station_id is not None:
             rows = conn.execute('\n            SELECT id, drink_name AS name, volume, price, item_type, order_time\n            FROM drink_orders\n            WHERE station_id = ? AND session_id IS NULL\n            ORDER BY item_type DESC, drink_name, id\n            ', (station_id,)).fetchall()
@@ -1081,10 +1082,10 @@ def get_station_drink_total(station_id: str, session_id: Optional[int]=None) -> 
     """Stolning yoki ma\'lum bir seansning ichimlik/market/jostik jami summasi.\n\n    Faol seansdagi jostiklar soatbay (qo\'shilgan vaqtdan boshlab) hisoblanadi.\n    """
     conn = _connect()
     session_active = False
-    if session_id:
+    if session_id is not None:
         srow = conn.execute('SELECT end_time FROM sessions WHERE id = ?', (int(session_id),)).fetchone()
         session_active = bool(srow) and srow['end_time'] is None
-        rows = conn.execute('\n            SELECT volume, price, order_time, item_type\n            FROM drink_orders\n            WHERE session_id = ?\n            ', (session_id,)).fetchall()
+        rows = conn.execute('\n            SELECT volume, price, order_time, item_type\n            FROM drink_orders\n            WHERE session_id = ?\n            ', (int(session_id),)).fetchall()
     else:
         rows = conn.execute('\n            SELECT volume, price, order_time, item_type\n            FROM drink_orders\n            WHERE station_id = ? AND session_id IS NULL\n            ', (station_id,)).fetchall()
     conn.close()
@@ -1100,10 +1101,35 @@ def get_station_drink_total(station_id: str, session_id: Optional[int]=None) -> 
         else:
             total += float(r['price'] or 0)
     return float(total)
+def get_session_joystick_total(station_id: str, session_id: Optional[int]=None) -> float:
+    """Faqat jostiklar summasi (ichimlik/market qo\'shilmaydi).\n\n    Jostik puli hisobda Playstation ustuniga qo\'shiladi, tovarlarga emas.\n    Summa har doim minglik, shu sababli uni tovarlardan ayirib Playstationga\n    qo\'shish jami summani o\'zgartirmaydi.\n    """
+    conn = _connect()
+    session_active = False
+    if session_id is not None:
+        srow = conn.execute('SELECT end_time FROM sessions WHERE id = ?', (int(session_id),)).fetchone()
+        session_active = bool(srow) and srow['end_time'] is None
+        rows = conn.execute('\n            SELECT volume, price, order_time\n            FROM drink_orders\n            WHERE session_id = ? AND item_type = \'joystick\'\n            ', (int(session_id),)).fetchall()
+    else:
+        rows = conn.execute('\n            SELECT volume, price, order_time\n            FROM drink_orders\n            WHERE station_id = ? AND session_id IS NULL AND item_type = \'joystick\'\n            ', (station_id,)).fetchall()
+    conn.close()
+    try:
+        from app.core.network_time import trusted_now_naive
+        now = trusted_now_naive()
+    except Exception:
+        now = datetime.now()
+    total = 0.0
+    for r in rows:
+        total += _joystick_line_amount(volume=float(r['volume'] or 0), price=float(r['price'] or 0), order_time=r['order_time'], session_active=session_active, until=now)
+    return float(total)
+def split_session_charges(station_id: str, session_id: Optional[int]=None) -> tuple[float, float]:
+    """Seans tovarlari va jostikni ajratadi.\n\n    Jostik puli Playstation summasiga qo\'shiladi, tovarlar ustuniga emas.\n    Qaytaradi: (tovarlar, jostik).\n    """
+    all_amt = float(get_station_drink_total(station_id, session_id) or 0)
+    joy = float(get_session_joystick_total(station_id, session_id) or 0)
+    return (max(0.0, all_amt - joy), joy)
 def get_returnable_orders_grouped(session_id: Optional[int], station_id: str) -> List[dict[str, Any]]:
     """Qaytarish uchun ichimlik/market/buyurtma guruhlari.\n\n    drink/market — omborga qaytadi; buyurtma — faqat o\'chiriladi.\n    """
     conn = _connect()
-    if session_id:
+    if session_id is not None:
         rows = conn.execute('\n            SELECT\n                drink_name AS name,\n                volume,\n                price,\n                item_type,\n                COUNT(*) AS count,\n                SUM(price) AS total,\n                MAX(id) AS latest_order_id\n            FROM drink_orders\n            WHERE session_id = ? AND item_type IN (\'drink\', \'market\', \'buyurtma\')\n            GROUP BY drink_name, volume, price, item_type\n            ORDER BY\n                CASE item_type\n                    WHEN \'buyurtma\' THEN 0\n                    WHEN \'market\' THEN 1\n                    ELSE 2\n                END,\n                drink_name\n            ', (session_id,)).fetchall()
     else:
         rows = conn.execute('\n            SELECT\n                drink_name AS name,\n                volume,\n                price,\n                item_type,\n                COUNT(*) AS count,\n                SUM(price) AS total,\n                MAX(id) AS latest_order_id\n            FROM drink_orders\n            WHERE station_id = ? AND session_id IS NULL\n              AND item_type IN (\'drink\', \'market\', \'buyurtma\')\n            GROUP BY drink_name, volume, price, item_type\n            ORDER BY\n                CASE item_type\n                    WHEN \'buyurtma\' THEN 0\n                    WHEN \'market\' THEN 1\n                    ELSE 2\n                END,\n                drink_name\n            ', (station_id,)).fetchall()
@@ -1995,7 +2021,9 @@ def cash_period_revenue(day: Optional[str]=None) -> dict[str, float]:
     """Joriy kassa davridagi tushum (Playstation + tovarlar). Buyurtma kirmaydi."""
     start, end = cash_period_bounds(day)
     report = operator_report_between(start, end)
-    return {'total': float(report.get('total') or 0), 'session_total': float(report.get('session_total') or 0), 'drink_total': float(report.get('drink_total') or 0) + float(report.get('market_total') or 0) + float(report.get('joystick_total') or 0), 'buyurtma_total': float(report.get('buyurtma_total') or 0), 'period_start': start, 'period_end': end}
+    joy = float(report.get('joystick_total') or 0)
+    goods = float(report.get('drink_total') or 0) + float(report.get('market_total') or 0)
+    return {'total': float(report.get('total') or 0), 'session_total': float(report.get('session_total') or 0) + joy, 'drink_total': goods, 'joystick_total': joy, 'buyurtma_total': float(report.get('buyurtma_total') or 0), 'period_start': start, 'period_end': end}
 def compute_cash_diff(total_income: float, expense_total: float, debt_total: float, debt_paid_total: float, closing_amount: float) -> tuple[float, float]:
     """Kutilgan summa va kassa farqi.\n\n    expected = tu\'sim - qa\'rejet - qarizlar + qarizin to\'legenler\n    cash_diff = jawılg\'andag\'i summa (naqd+CLICK bo\'lishi mumkin) - expected\n    """
     expected = float(total_income or 0) - float(expense_total or 0) - float(debt_total or 0) + float(debt_paid_total or 0)

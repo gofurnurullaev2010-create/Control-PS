@@ -1074,7 +1074,7 @@ class AdminPanelDialog(QDialog):
                 start = self._format_time_only(s.get('start_time', ''))
                 end = self._format_time_only(s.get('end_time', ''))
                 minutes = int(s.get('duration_minutes') or 0)
-                ses_rev = float(s.get('session_revenue') or 0)
+                ses_rev = float(s.get('session_revenue') or 0) + float(s.get('joystick_revenue') or 0)
                 dri_rev = float(s.get('drink_revenue') or 0)
                 tot_rev = float(s.get('revenue') or 0)
                 self.sessions_table.setItem(i, 0, QTableWidgetItem(db.get_station_display_name(station_id)))

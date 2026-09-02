@@ -312,12 +312,14 @@ class StationCard(QFrame):
                 self._col_played.setText(self._format_seconds(rem))
             ps_amount = self._ps_live_amount()
             drink_total = 0
+            joystick_total = 0
             if self._session_db_id is not None:
                 drink_total = self._port.drink_total(self.station_id, self._session_db_id)
+                joystick_total = self._port.joystick_total(self.station_id, self._session_db_id)
             extra = self._extra_amount()
             from app.core.money import round_to_thousand
-            ps_show = round_to_thousand(ps_amount)
-            goods_show = round_to_thousand(extra + drink_total)
+            ps_show = round_to_thousand(ps_amount + joystick_total)
+            goods_show = round_to_thousand(extra + max(0.0, drink_total - joystick_total))
             total = ps_show + goods_show
             self._col_ps.setText(f'{ps_show:,.0f}')
             self._col_goods.setText(f'{goods_show:,.0f}')
@@ -1071,13 +1073,12 @@ class StationCard(QFrame):
             was_vip = bool(self._vip_open)
             extra = self._extra_amount()
             drink_total = 0.0
+            joystick_total = 0.0
             order_items = []
             try:
-                drink_total = float(self._port.drink_total(self.station_id, self._session_db_id) or 0)
-            except Exception:
-                drink_total = 0.0
-            try:
                 import database as _db
+                drink_total = float(self._port.drink_total(self.station_id, self._session_db_id) or 0)
+                joystick_total = float(self._port.joystick_total(self.station_id, self._session_db_id) or 0)
                 grouped = self._port.session_orders_grouped(self._session_db_id, self.station_id)
                 for it in grouped:
                     name = it.get('name', '')
@@ -1101,15 +1102,19 @@ class StationCard(QFrame):
                                 img = None
                         order_items.append({'name': display_name, 'size': size.strip(), 'count': cnt, 'unit': unit, 'total': line_total, 'image': img, 'item_type': str(it.get('item_type') or ''), 'note': str(name) if is_buyurtma else ''})
             except Exception:
+                logging.getLogger('tv').exception('Chek tuzilmadi: %s', self.station_id)
                 order_items = []
+                drink_total = 0.0
+                joystick_total = 0.0
             time_rev = self._ps_live_amount()
             from app.core.money import round_to_thousand
-            ps_show = round_to_thousand(time_rev)
-            goods_show = round_to_thousand(extra + drink_total)
+            goods_total = max(0.0, drink_total - joystick_total)
+            ps_show = round_to_thousand(time_rev + joystick_total)
+            goods_show = round_to_thousand(extra + goods_total)
             total = ps_show + goods_show
             label_vip = ' (VIP)' if was_vip else ''
             try:
-                self.session_receipt.emit({'title': 'Joriy hisob', 'station': f'{self.display_name()}{label_vip}', 'body_html': '', 'total': total, 'time_rev': ps_show, 'drink_total': drink_total, 'extra': extra, 'order_items': order_items, 'duration_ms': 25000, 'preview': True})
+                self.session_receipt.emit({'title': 'Joriy hisob', 'station': f'{self.display_name()}{label_vip}', 'body_html': '', 'total': total, 'time_rev': ps_show, 'drink_total': goods_total, 'joystick_total': joystick_total, 'extra': extra, 'order_items': order_items, 'duration_ms': 25000, 'preview': True})
             except Exception:
                 logging.getLogger('tv').exception('Monitor preview yuborilmadi')
     def _open_buyurtma_dialog(self) -> None:
@@ -1148,11 +1153,14 @@ class StationCard(QFrame):
         t = self._ps_live_amount()
         ex = self._extra_amount()
         drink_total = 0
+        joystick_total = 0
         if self._session_db_id is not None:
             drink_total = self._port.drink_total(self.station_id, self._session_db_id)
+            joystick_total = self._port.joystick_total(self.station_id, self._session_db_id)
         from app.core.money import round_to_thousand
+        goods_total = max(0.0, drink_total - joystick_total)
         jami = round_to_thousand(t + ex + drink_total)
-        self._vip_sum.setText(f'💰 {jami:,.0f} so\'m  (Vaqt {round_to_thousand(t):,.0f} + Ichimlik {round_to_thousand(drink_total):,.0f} + Qo\'shimcha {round_to_thousand(ex):,.0f})')
+        self._vip_sum.setText(f'💰 {jami:,.0f} so\'m  (Vaqt {round_to_thousand(t + joystick_total):,.0f} + Ichimlik {round_to_thousand(goods_total):,.0f} + Qo\'shimcha {round_to_thousand(ex):,.0f})')
     def _resume_or_block_duplicate_start(self) -> bool:
         """Bazada ochiq seans qolgan bo\'lsa yangi yozuv ochmaslik."""
         if self._busy:
@@ -1515,6 +1523,7 @@ class StationCard(QFrame):
             self._sync_action_buttons()
             self._on_state_changed()
             drink_total = 0.0
+            joystick_total = 0.0
             order_lines = []
             order_items = []
             if session_db_id is not None:
@@ -1523,11 +1532,9 @@ class StationCard(QFrame):
                 except Exception:
                     pass
                 try:
-                    drink_total = float(self._port.drink_total(self.station_id, session_db_id) or 0)
-                except Exception:
-                    drink_total = 0.0
-                try:
                     import database as _db
+                    drink_total = float(self._port.drink_total(self.station_id, session_db_id) or 0)
+                    joystick_total = float(self._port.joystick_total(self.station_id, session_db_id) or 0)
                     grouped = self._port.session_orders_grouped(session_db_id, self.station_id)
                     for it in grouped:
                         name = it.get('name', '')
@@ -1546,8 +1553,8 @@ class StationCard(QFrame):
                             else:
                                 size = f' {vol:g}g' if is_market and vol else f' {vol:g}L' if vol and (not is_market) else ''
                         display_name = f'Buyurtma: {name}' if is_buyurtma else str(name)
-                        order_lines.append(f'&nbsp;&nbsp;• {display_name}{size} — {cnt} x {unit:,.0f} = {line_total:,.0f} so\'m')
                         if not is_joy:
+                            order_lines.append(f'&nbsp;&nbsp;• {display_name}{size} — {cnt} x {unit:,.0f} = {line_total:,.0f} so\'m')
                             img = None
                             if not is_buyurtma:
                                 try:
@@ -1556,12 +1563,16 @@ class StationCard(QFrame):
                                     img = None
                             order_items.append({'name': display_name, 'size': size.strip(), 'count': cnt, 'unit': unit, 'total': line_total, 'image': img, 'item_type': str(it.get('item_type') or ''), 'note': str(name) if is_buyurtma else ''})
                 except Exception:
+                    logging.getLogger('billing').exception('Chek tuzilmadi: %s', self.station_id)
                     order_lines = []
                     order_items = []
+                    drink_total = 0.0
+                    joystick_total = 0.0
             time_rev = self._ps_final_amount(was_vip=was_vip, start_dt=session_start_dt, end_dt=session_end_dt, booked_seconds=total_seconds_snap, locked_rate=locked_rate_snap or None)
             from app.core.money import round_to_thousand
-            ps_bill = round_to_thousand(time_rev)
-            goods_bill = round_to_thousand(extra + drink_total)
+            goods_total = max(0.0, drink_total - joystick_total)
+            ps_bill = round_to_thousand(time_rev + joystick_total)
+            goods_bill = round_to_thousand(extra + goods_total)
             revenue = ps_bill + goods_bill
             time_rev = ps_bill
             minutes = max(1, (elapsed + 59) // 60) if elapsed else 0
@@ -1580,7 +1591,7 @@ class StationCard(QFrame):
             if order_lines:
                 detail_lines.append('Olingan mahsulotlar:')
                 detail_lines.extend(order_lines)
-                detail_lines.append(f'<span style=\'color:{TEXT_SECONDARY};\'>Mahsulotlar jami: {drink_total:,.0f} so\'m</span>')
+                detail_lines.append(f'<span style=\'color:{TEXT_SECONDARY};\'>Mahsulotlar jami: {goods_total:,.0f} so\'m</span>')
             else:
                 detail_lines.append('Mahsulotlar: yo\'q')
             if extra > 0:
@@ -1595,7 +1606,7 @@ class StationCard(QFrame):
                 else:
                     title = 'STOP — hisob'
             try:
-                self.session_receipt.emit({'title': title, 'station': station_title, 'body_html': body_html, 'total': revenue, 'time_rev': time_rev, 'drink_total': drink_total, 'extra': extra, 'order_items': order_items, 'duration_ms': 20000, 'rollover': bool(restart_vip), 'preview': bool(restart_vip)})
+                self.session_receipt.emit({'title': title, 'station': station_title, 'body_html': body_html, 'total': revenue, 'time_rev': time_rev, 'drink_total': goods_total, 'joystick_total': joystick_total, 'extra': extra, 'order_items': order_items, 'duration_ms': 20000, 'rollover': bool(restart_vip), 'preview': bool(restart_vip)})
             except Exception:
                 logging.getLogger('tv').exception('Mijoz ekrani hisoboti yuborilmadi')
             try:

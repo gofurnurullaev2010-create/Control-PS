@@ -15,6 +15,8 @@ class SessionRepository:
         return bool(legacy.module().transfer_active_session(session_id, new_station_id))
     def drink_total(self, station_id: str, session_id: Optional[int]) -> float:
         return float(legacy.module().get_station_drink_total(station_id, session_id))
+    def joystick_total(self, station_id: str, session_id: Optional[int]) -> float:
+        return float(legacy.module().get_session_joystick_total(station_id, session_id))
     def orders_grouped(self, session_id: Optional[int], station_id: Optional[str]=None):
         return legacy.module().get_session_orders_grouped(session_id, station_id)
     def detailed_daily_report(self, day: Optional[str]=None):

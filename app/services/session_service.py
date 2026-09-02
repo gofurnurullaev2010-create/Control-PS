@@ -18,6 +18,8 @@ class SessionService:
         return self._sessions.transfer(session_id, new_station_id)
     def drink_total(self, station_id: str, session_id: Optional[int]) -> float:
         return self._sessions.drink_total(station_id, session_id)
+    def joystick_total(self, station_id: str, session_id: Optional[int]) -> float:
+        return self._sessions.joystick_total(station_id, session_id)
     def time_revenue(self, station_id: str, seconds: int, at_time=None, *, lock_rate_at_start: bool=False) -> float:
         return self._stations.calculate_time_revenue(station_id, seconds, at_time, lock_rate_at_start=lock_rate_at_start)
     def daily_report(self, day: Optional[str]=None) -> List[dict[str, Any]]:
