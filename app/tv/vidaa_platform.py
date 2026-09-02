@@ -21,12 +21,20 @@ VIDAA_BRANDS = frozenset({"vidaa", "hisense", "hisense_vidaa", "toshiba", "toshi
 VIDAA_PORT = 36669
 VIDAA_UPNP_PORT = 38400
 TOKEN_FILE = "vidaa_tokens.json"
+ACCESS_TOKEN_DAYS = 7
+REFRESH_TOKEN_DAYS = 30
 
 
 def app_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+    """Token/sozlama papkasi: exe yonida, koddan ishlatilsa loyiha ildizi."""
+    try:
+        from app.core.runtime import app_dir as runtime_app_dir
+
+        return runtime_app_dir()
+    except Exception:
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).resolve().parent
+        return Path(__file__).resolve().parents[2]
 
 
 def is_vidaa_brand(brand: str) -> bool:
@@ -139,14 +147,81 @@ def wake(mac: str, host: str = "") -> bool:
         return False
 
 
+def token_file_path() -> Path:
+    """vidaa_tokens.json — avval exe/loyiha ildizi, eski joydan ko'chiriladi."""
+    primary = app_dir() / TOKEN_FILE
+    if primary.is_file():
+        return primary
+    legacy = Path(__file__).resolve().parent / TOKEN_FILE
+    if legacy.is_file() and legacy.resolve() != primary.resolve():
+        try:
+            primary.parent.mkdir(parents=True, exist_ok=True)
+            primary.write_bytes(legacy.read_bytes())
+            logger.info("VIDAA tokenlar ko'chirildi: %s -> %s", legacy, primary)
+        except Exception as e:
+            logger.warning("VIDAA token ko'chirish xato: %s", e)
+            return legacy
+    return primary
+
+
+def _repair_token_expiry(path: Path) -> None:
+    """Eski token faylida muddat maydoni bo'lmasa — yangilash/refresh yoqiladi.
+
+    Hisense access token ~7 kun, refresh ~30 kun. Muddat yo'q bo'lsa kutubxona
+    tokenni o'lik deb hisoblab, 1 haftadan keyin TV ni tashlab qo'yardi.
+    """
+    if not path.is_file():
+        return
+    try:
+        import json
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+    now = time.time()
+    changed = False
+    for tok in data.values():
+        if not isinstance(tok, dict):
+            continue
+        if tok.get("access_token") and not tok.get("access_token_expires_at"):
+            if tok.get("refresh_token"):
+                tok["access_token_expires_at"] = now - 60
+            else:
+                base = float(tok.get("access_token_time") or now)
+                tok["access_token_expires_at"] = base + ACCESS_TOKEN_DAYS * 86400
+            changed = True
+        if tok.get("refresh_token") and not tok.get("refresh_token_expires_at"):
+            base = float(tok.get("refresh_token_time") or tok.get("access_token_time") or now)
+            tok["refresh_token_expires_at"] = base + REFRESH_TOKEN_DAYS * 86400
+            changed = True
+    if not changed:
+        return
+    try:
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        logger.info("VIDAA token muddatlari tiklandi: %s", path)
+    except Exception as e:
+        logger.warning("VIDAA token tiklash xato: %s", e)
+
+
 def _token_storage():
     from vidaa.config import TokenStorage
 
-    return TokenStorage(Path(app_dir()) / TOKEN_FILE)
+    path = token_file_path()
+    _repair_token_expiry(path)
+    return TokenStorage(path)
 
 
 def _client(host: str, mac: str = "", brand: str = ""):
-    from vidaa import VidaaTV
+    try:
+        from vidaa import VidaaTV
+    except ImportError as e:
+        logger.error(
+            "VIDAA kutubxona topilmadi (vidaa-control). START/STOP ishlamaydi: %s",
+            e,
+        )
+        raise
 
     host = (host or "").split(":", 1)[0].strip()
     info = _detect_vidaa_info(host)
@@ -163,13 +238,41 @@ def _client(host: str, mac: str = "", brand: str = ""):
     )
 
 
+def _connect_ready(tv, timeout: float = 12.0) -> bool:
+    """MQTT ulanish + muddati yaqin tokenni oldindan yangilash."""
+    try:
+        ok = bool(tv.connect(timeout=timeout, auto_auth=True, auto_refresh=True))
+    except Exception as e:
+        logger.warning("VIDAA connect xato %s: %s", getattr(tv, "host", ""), e)
+        return False
+    if not ok:
+        logger.warning(
+            "VIDAA MQTT ulanmadi %s. Token eskirgan bo'lishi mumkin — "
+            "TV sozlamalarida «VIDAA PIN pairing» ni qayta qiling.",
+            getattr(tv, "host", ""),
+        )
+        return False
+    try:
+        storage = getattr(tv, "_storage", None)
+        if storage is not None:
+            status = storage.get_token_status(
+                device_id=getattr(tv, "mac_address", None) or None,
+                host=getattr(tv, "host", None),
+                port=getattr(tv, "port", VIDAA_PORT),
+            )
+            left = int(status.get("access_expires_in") or 0)
+            if status.get("refresh_valid") and 0 <= left < 2 * 86400:
+                if tv.refresh_token(timeout=timeout):
+                    logger.info("VIDAA token yangilandi: %s (qoldi %s soat)", tv.host, left // 3600)
+    except Exception as e:
+        logger.debug("VIDAA proactive refresh: %s", e)
+    return True
+
+
 def _ensure_connected(tv, timeout: float = 10.0) -> bool:
     if getattr(tv, "_connected", False):
         return True
-    try:
-        return bool(tv.connect(auto_auth=False, timeout=timeout))
-    except Exception:
-        return False
+    return _connect_ready(tv, timeout=timeout)
 
 
 def _install_pin_listener(tv) -> "threading.Event":
@@ -309,7 +412,10 @@ def _trigger_pin(tv) -> bool:
 
 def pair(host: str, mac: str, pin_provider: Optional[Callable[[], str]] = None, brand: str = "") -> bool:
     """TV ekranida PIN chiqarib, pin_provider bergan PIN bilan pairing qiladi."""
-    tv = _client(host, mac, brand)
+    try:
+        tv = _client(host, mac, brand)
+    except ImportError:
+        return False
     try:
         if not tv.connect(auto_auth=False, timeout=15):
             logger.warning("VIDAA pairing connect xato: %s", host)
@@ -339,10 +445,12 @@ def pair(host: str, mac: str, pin_provider: Optional[Callable[[], str]] = None, 
 
 
 def _run(host: str, mac: str, fn: Callable, brand: str = "") -> bool:
-    tv = _client(host, mac, brand)
     try:
-        if not tv.connect(timeout=10):
-            logger.warning("VIDAA connect xato: %s", host)
+        tv = _client(host, mac, brand)
+    except ImportError:
+        return False
+    try:
+        if not _connect_ready(tv, timeout=12.0):
             return False
         return bool(fn(tv))
     except Exception as e:
@@ -367,6 +475,8 @@ def _safe_wake_if_fake_sleep(host: str, mac: str, brand: str = "") -> bool:
 
 def power_on(host: str, mac: str, *, wait_s: float = 45.0, brand: str = "") -> bool:
     host = (host or "").split(":", 1)[0].strip()
+    if not mac:
+        logger.warning("VIDAA START: MAC yo'q — Wake-on-LAN ishlamaydi (%s)", host)
     if mac:
         wake(mac, host)
     if not wait_until_online(host, timeout_s=wait_s):

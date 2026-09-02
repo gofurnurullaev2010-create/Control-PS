@@ -318,8 +318,8 @@ class StationCard(QFrame):
                 joystick_total = self._port.joystick_total(self.station_id, self._session_db_id)
             extra = self._extra_amount()
             from app.core.money import round_to_thousand
-            ps_show = round_to_thousand(ps_amount + joystick_total)
-            goods_show = round_to_thousand(extra + max(0.0, drink_total - joystick_total))
+            ps_show = round_to_thousand(ps_amount + joystick_total + extra)
+            goods_show = round_to_thousand(max(0.0, drink_total - joystick_total))
             total = ps_show + goods_show
             self._col_ps.setText(f'{ps_show:,.0f}')
             self._col_goods.setText(f'{goods_show:,.0f}')
@@ -1109,8 +1109,8 @@ class StationCard(QFrame):
             time_rev = self._ps_live_amount()
             from app.core.money import round_to_thousand
             goods_total = max(0.0, drink_total - joystick_total)
-            ps_show = round_to_thousand(time_rev + joystick_total)
-            goods_show = round_to_thousand(extra + goods_total)
+            ps_show = round_to_thousand(time_rev + joystick_total + extra)
+            goods_show = round_to_thousand(goods_total)
             total = ps_show + goods_show
             label_vip = ' (VIP)' if was_vip else ''
             try:
@@ -1391,7 +1391,8 @@ class StationCard(QFrame):
                     import vidaa_platform
                     host = tv_handler.normalize_tv_host(settings.tv_ip)
                     if vidaa_platform.is_vidaa_brand(settings.brand):
-                        vidaa_platform.power_on(host, settings.tv_mac, wait_s=10.0, brand=settings.brand)
+                        if vidaa_platform.power_on(host, settings.tv_mac, wait_s=25.0, brand=settings.brand):
+                            vidaa_platform.set_source(host, settings.tv_mac, settings.hdmi_input, brand=settings.brand)
                     else:
                         if tv_platforms.is_webos_brand(settings.brand):
                             handler = TVHandler(settings.tv_ip, settings.tv_mac, settings.brand, settings.hdmi_input)
@@ -1571,8 +1572,8 @@ class StationCard(QFrame):
             time_rev = self._ps_final_amount(was_vip=was_vip, start_dt=session_start_dt, end_dt=session_end_dt, booked_seconds=total_seconds_snap, locked_rate=locked_rate_snap or None)
             from app.core.money import round_to_thousand
             goods_total = max(0.0, drink_total - joystick_total)
-            ps_bill = round_to_thousand(time_rev + joystick_total)
-            goods_bill = round_to_thousand(extra + goods_total)
+            ps_bill = round_to_thousand(time_rev + joystick_total + extra)
+            goods_bill = round_to_thousand(goods_total)
             revenue = ps_bill + goods_bill
             time_rev = ps_bill
             minutes = max(1, (elapsed + 59) // 60) if elapsed else 0

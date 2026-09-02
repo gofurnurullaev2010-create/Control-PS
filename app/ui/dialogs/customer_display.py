@@ -218,8 +218,7 @@ class CustomerDisplayWindow(QWidget):
         self._receipt_title.setText(title)
         self._receipt_station.setText(station)
         self._receipt_time.setText(f'PlayStation: {time_rev:,.0f} so\'m')
-        goods_sum = drink_total + (extra if extra > 0 else 0)
-        self._receipt_goods.setText(f'Tovarlar: {goods_sum:,.0f} so\'m')
+        self._receipt_goods.setText(f'Tovarlar: {drink_total:,.0f} so\'m')
         self._receipt_goods.setVisible(True)
         try:
             w = max(480, int(self.width() * 0.78))
@@ -439,8 +438,8 @@ class CustomerDisplayWindow(QWidget):
                 order_items = []
                 goods_total = 0.0
                 joystick_total = 0.0
-        ps_show = round_to_thousand(time_rev + joystick_total)
-        goods_show = round_to_thousand(extra + goods_total)
+        ps_show = round_to_thousand(time_rev + joystick_total + extra)
+        goods_show = round_to_thousand(goods_total)
         total = ps_show + goods_show
         label_vip = ' (VIP)' if was_vip else ''
         station_title = f'{card.display_name()}{label_vip}'
@@ -553,8 +552,8 @@ class CustomerDisplayWindow(QWidget):
                 goods, joystick = (0.0, 0.0)
         extra = float(card._extra_amount()) if hasattr(card, '_extra_amount') else 0.0
         from app.core.money import round_to_thousand
-        ps_show = round_to_thousand(ps_amount + joystick)
-        goods_show = round_to_thousand(goods + extra)
+        ps_show = round_to_thousand(ps_amount + joystick + extra)
+        goods_show = round_to_thousand(goods)
         total = ps_show + goods_show
         labels['started'].setText(started)
         labels['played'].setText(card._format_seconds(played_seconds))

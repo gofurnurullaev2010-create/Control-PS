@@ -78,7 +78,7 @@ class TVSettingsDialog(QDialog):
         else:
             if b in ['vidaa', 'hisense', 'hisense_vidaa', 'toshiba', 'toshiba_vidaa', 'tos']:
                 self._mac.setPlaceholderText('Majburiy: AA:BB:CC:DD:EE:FF (VIDAA Wake-on-LAN)')
-                self._webos_hint.setText('VIDAA/Toshiba: STOP TV ni o\'chiradi, START Wake-on-LAN bilan yoqadi va HDMI ga o\'tadi. Pairing uchun pastdagi «VIDAA PIN pairing» tugmasini bosing (yoki vidaa_tv_pair.bat).')
+                self._webos_hint.setText('VIDAA/Toshiba: STOP TV ni o\'chiradi, START Wake-on-LAN bilan yoqadi va HDMI ga o\'tadi. Pairing bir marta + har 30 kunda (yoki TV ulanmasa) «VIDAA PIN pairing». Token ~7 kunda yangilanadi — dastur o\'zi yangilaydi.')
                 self._webos_hint.show()
             else:
                 self._mac.setPlaceholderText('AA:BB:CC:DD:EE:FF (Wake-on-LAN uchun)')
@@ -149,7 +149,7 @@ class TVSettingsDialog(QDialog):
                             except Exception as e:
                                 logger.warning('webOS sozlash %s: %s', sid, e)
                         threading.Thread(target=_push_webos, daemon=True, name=f'webos-cfg-{sid}').start()
-                QMessageBox.information(self, 'OK', 'Saqlandi.\n\nVIDAA uchun PIN pairing kerak bo\'lsa — «VIDAA PIN pairing» tugmasini bosing.')
+                QMessageBox.information(self, 'OK', 'Saqlandi.\n\nVIDAA uchun PIN pairing kerak bo\'lsa — «VIDAA PIN pairing» tugmasini bosing.\nTV 1 haftadan keyin ulanmasa — pairingni qayta qiling.')
     def _pair_vidaa_optional(self) -> None:
         """Pairing fon oqimida — asosiy oynani qotirmaydi."""
         brand = self._brand.currentText().strip().lower()
@@ -205,4 +205,4 @@ class TVSettingsDialog(QDialog):
             if ok:
                 QMessageBox.information(self, 'VIDAA', 'Pairing tayyor. START/STOP ishlaydi.')
             else:
-                QMessageBox.warning(self, 'VIDAA', 'Pairing yakunlanmadi. TV Home ekranida bo\'lsin, Remote control yoqilgan bo\'lsin, IP/MAC ni tekshiring.')
+                QMessageBox.warning(self, 'VIDAA', 'Pairing yakunlanmadi. TV Home ekranida bo\'lsin, Remote control yoqilgan bo\'lsin, IP/MAC ni tekshiring.\n\nAgar avval ishlagan bo\'lsa — token eskirgan: PIN pairingni qayta qiling.')

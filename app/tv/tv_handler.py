@@ -1278,7 +1278,7 @@ class TVHandler:
             if self._is_vidaa():
                 host = normalize_tv_host(self.tv_ip)
                 print(f'[TVHandler] VIDAA START: WOL + HDMI{self.hdmi_input} {host}')
-                if vidaa_platform.power_on(host, self.tv_mac, wait_s=10.0, brand=self.brand):
+                if vidaa_platform.power_on(host, self.tv_mac, wait_s=25.0, brand=self.brand):
                     vidaa_platform.set_source(host, self.tv_mac, self.hdmi_input, brand=self.brand)
                 return None
             else:
@@ -1423,7 +1423,7 @@ class TVHandler:
             if self._is_vidaa():
                 host = normalize_tv_host(self.tv_ip)
                 print(f'[TVHandler] VIDAA unblock: WOL + HDMI{self.hdmi_input} {host}')
-                if vidaa_platform.power_on(host, self.tv_mac, wait_s=10.0, brand=self.brand):
+                if vidaa_platform.power_on(host, self.tv_mac, wait_s=25.0, brand=self.brand):
                     vidaa_platform.set_source(host, self.tv_mac, self.hdmi_input, brand=self.brand)
                 return None
             else:

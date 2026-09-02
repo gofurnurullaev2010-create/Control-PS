@@ -798,8 +798,8 @@ def revenue_split_for_day(day: str) -> dict[str, float]:
     for r in ended:
         ended_session_time += max(0.0, float(r['revenue'] or 0) - float(r['drink_rev'] or 0))
     joystick_linked = float(conn.execute('\n            SELECT COALESCE(SUM(d.price), 0)\n            FROM drink_orders d\n            JOIN sessions s ON d.session_id = s.id\n            WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n              AND lower(COALESCE(d.item_type, \'\')) = \'joystick\'\n            ', (start, end)).fetchone()[0] or 0)
-    ended_drinks = float(conn.execute('\n            SELECT COALESCE(SUM(d.price), 0)\n            FROM drink_orders d\n            JOIN sessions s ON d.session_id = s.id\n            WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n              AND lower(COALESCE(d.item_type, \'drink\')) IN (\'drink\', \'market\')\n            ', (start, end)).fetchone()[0] or 0)
-    standalone_drinks = float(conn.execute('\n            SELECT COALESCE(SUM(price), 0)\n            FROM drink_orders\n            WHERE session_id IS NULL AND order_time >= ? AND order_time < ?\n              AND lower(COALESCE(item_type, \'drink\')) IN (\'drink\', \'market\')\n            ', (start, end)).fetchone()[0] or 0)
+    ended_drinks = float(conn.execute('\n            SELECT COALESCE(SUM(d.price), 0)\n            FROM drink_orders d\n            JOIN sessions s ON d.session_id = s.id\n            WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n              AND lower(COALESCE(d.item_type, \'drink\')) IN (\'drink\', \'market\', \'buyurtma\')\n            ', (start, end)).fetchone()[0] or 0)
+    standalone_drinks = float(conn.execute('\n            SELECT COALESCE(SUM(price), 0)\n            FROM drink_orders\n            WHERE session_id IS NULL AND order_time >= ? AND order_time < ?\n              AND lower(COALESCE(item_type, \'drink\')) IN (\'drink\', \'market\', \'buyurtma\')\n            ', (start, end)).fetchone()[0] or 0)
     conn.close()
     session_total = float(ended_session_time) + float(joystick_linked)
     drink_total = float(ended_drinks + standalone_drinks)
@@ -1354,7 +1354,7 @@ def operator_report_between(start_iso: str, end_iso: str) -> dict[str, Any]:
         market = [dict(r) for r in conn.execute(f"\n                SELECT d.drink_name AS name, d.volume,\n                       COUNT(*) AS count, SUM(d.price) AS total\n                {market_list_sql}\n                GROUP BY d.drink_name, d.volume, d.price\n                ORDER BY d.drink_name\n                ", period).fetchall()]
     finally:
         conn.close()
-    total = session_total + drink_total + market_total + joystick_total
+    total = session_total + drink_total + market_total + joystick_total + buyurtma_total
     return {'period_start': start_iso, 'period_end': end_iso, 'session_total': session_total, 'drink_total': drink_total, 'market_total': market_total, 'joystick_total': joystick_total, 'buyurtma_total': buyurtma_total, 'total': total, 'drinks': drinks, 'market': market}
 def add_debtor(client_name: str, phone: str, amount: float, note: str='') -> int:
     """Yangi qarzdor yozuvi qo\'shish."""
@@ -2018,11 +2018,11 @@ def cash_period_bounds(day: Optional[str]=None) -> tuple[str, str]:
         start = period
     return (start, end)
 def cash_period_revenue(day: Optional[str]=None) -> dict[str, float]:
-    """Joriy kassa davridagi tushum (Playstation + tovarlar). Buyurtma kirmaydi."""
+    """Joriy kassa davridagi tushum (Playstation + tovarlar + buyurtma)."""
     start, end = cash_period_bounds(day)
     report = operator_report_between(start, end)
     joy = float(report.get('joystick_total') or 0)
-    goods = float(report.get('drink_total') or 0) + float(report.get('market_total') or 0)
+    goods = float(report.get('drink_total') or 0) + float(report.get('market_total') or 0) + float(report.get('buyurtma_total') or 0)
     return {'total': float(report.get('total') or 0), 'session_total': float(report.get('session_total') or 0) + joy, 'drink_total': goods, 'joystick_total': joy, 'buyurtma_total': float(report.get('buyurtma_total') or 0), 'period_start': start, 'period_end': end}
 def compute_cash_diff(total_income: float, expense_total: float, debt_total: float, debt_paid_total: float, closing_amount: float) -> tuple[float, float]:
     """Kutilgan summa va kassa farqi.\n\n    expected = tu\'sim - qa\'rejet - qarizlar + qarizin to\'legenler\n    cash_diff = jawılg\'andag\'i summa (naqd+CLICK bo\'lishi mumkin) - expected\n    """

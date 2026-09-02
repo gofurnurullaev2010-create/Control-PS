@@ -1,5 +1,6 @@
 from __future__ import annotations
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -118,6 +119,33 @@ class DatabaseCompatTests(unittest.TestCase):
         products, buy = receipt_display_items([{'name': 'Cola', 'item_type': 'drink'}, {'name': 'Jostik', 'item_type': 'joystick'}, {'name': 'X', 'item_type': 'buyurtma'}])
         self.assertEqual([p['name'] for p in products], ['Cola'])
         self.assertEqual([b['name'] for b in buy], ['X'])
+    def test_buyurtma_counts_in_cash_total(self) -> None:
+        from datetime import datetime, timedelta
+        sid = db.list_station_ids()[0]
+        session_id = db.start_session_row(sid, total_seconds=3600, is_vip=True)
+        db.add_session_buyurtma(sid, session_id, 12000, 'Pizza')
+        now = datetime.now()
+        start = (now - timedelta(hours=1)).isoformat(timespec='seconds')
+        db.end_session_row(session_id, 60, 50000)
+        conn = db._connect()
+        conn.execute('UPDATE sessions SET end_time = ? WHERE id = ?', (now.isoformat(timespec='seconds'), session_id))
+        conn.commit()
+        conn.close()
+        report = db.operator_report_between(start, (now + timedelta(seconds=2)).isoformat(timespec='seconds'))
+        self.assertEqual(float(report.get('buyurtma_total') or 0), 12000.0)
+        self.assertGreaterEqual(float(report.get('total') or 0), 12000.0)
+        self.assertAlmostEqual(float(report['total']), float(report['session_total']) + float(report['drink_total']) + float(report['market_total']) + float(report['joystick_total']) + float(report['buyurtma_total']), delta=0.01)
+    def test_vidaa_token_repair_sets_expiry(self) -> None:
+        import json
+        from app.tv.vidaa_platform import _repair_token_expiry
+        path = Path(self._tmpdir.name) / 'vidaa_tokens.json'
+        path.write_text(json.dumps({'dev1': {'access_token': 'a', 'refresh_token': 'r', 'client_id': 'c'}}), encoding='utf-8')
+        _repair_token_expiry(path)
+        data = json.loads(path.read_text(encoding='utf-8'))
+        tok = data['dev1']
+        self.assertIn('access_token_expires_at', tok)
+        self.assertIn('refresh_token_expires_at', tok)
+        self.assertLess(float(tok['access_token_expires_at']), time.time())
     def test_round_to_thousand(self) -> None:
         from app.core.money import round_to_thousand
         self.assertEqual(round_to_thousand(12783), 13000)

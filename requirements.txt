@@ -3,6 +3,7 @@ PyQt6-Qt6==6.11.0
 Pillow>=10.0
 qrcode>=7.4
 paho-mqtt>=2.0
+vidaa-control>=1.1.0
 PyYAML>=6.0
 samsungtvws>=2.6
 wakeonlan>=3.1
