@@ -751,8 +751,7 @@ class MainWindow(QMainWindow):
         if payload.get('preview'):
             try:
                 from app.ui.dialogs.customer_display import show_operator_receipt
-                host = self.centralWidget() or self
-                show_operator_receipt(host, payload, int(payload.get('operator_ms') or 8000))
+                show_operator_receipt(self, payload, int(payload.get('operator_ms') or 8000))
             except Exception as e:
                 logger.warning('Operator cheki: %s', e)
         if payload.get('preview') or payload.get('rollover'):

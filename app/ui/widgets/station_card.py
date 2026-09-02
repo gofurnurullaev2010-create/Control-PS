@@ -1141,7 +1141,7 @@ class StationCard(QFrame):
             total = billable + buy_show
             label_vip = ' (VIP)' if was_vip else ''
             try:
-                self.session_receipt.emit({'title': 'Joriy hisob', 'station': f'{self.display_name()}{label_vip}', 'body_html': '', 'total': total, 'time_rev': ps_show, 'drink_total': goods_show, 'joystick_total': joystick_total, 'buyurtma_total': buy_show, 'extra': extra, 'order_items': order_items, 'duration_ms': 25000, 'preview': True, 'operator_ms': 8000, 'billable_total': billable})
+                self.session_receipt.emit({'title': 'Joriy hisob', 'station': f'{self.display_name()}{label_vip}', 'body_html': '', 'total': total, 'time_rev': ps_show, 'drink_total': goods_show, 'joystick_total': joystick_total, 'buyurtma_total': buy_show, 'extra': extra, 'order_items': order_items, 'duration_ms': 15000, 'customer_ms': 15000, 'preview': True, 'operator_ms': 8000, 'billable_total': billable})
             except Exception:
                 logging.getLogger('tv').exception('Monitor preview yuborilmadi')
     def _open_buyurtma_dialog(self) -> None:

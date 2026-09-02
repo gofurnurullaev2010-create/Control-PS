@@ -174,7 +174,7 @@ class CustomerDisplayWindow(QWidget):
             self._receipt_overlay.setGeometry(self.rect())
         if self._zakaz_overlay.isVisible():
             self._zakaz_overlay.setGeometry(self.rect())
-    def show_on_customer_screen(self, *, force: bool=False) -> None:
+    def show_on_customer_screen(self, *, force: bool=False, steal_focus: bool=True) -> None:
         screens = QApplication.screens()
         if len(screens) < 2:
             if not force:
@@ -184,20 +184,36 @@ class CustomerDisplayWindow(QWidget):
                 geo = screens[0].availableGeometry() if screens else self.geometry()
                 self.setGeometry(geo.adjusted(80, 60, (-80), (-60)))
                 self.showMaximized()
-                self.activateWindow()
+                if steal_focus:
+                    self.activateWindow()
                 return
         else:
             screen = screens[1]
             self.setGeometry(screen.geometry())
             self.showFullScreen()
-            self.activateWindow()
-            self.raise_()
+            if steal_focus:
+                self.activateWindow()
+                self.raise_()
     def show_session_receipt(self, payload: dict, duration_ms: int=20000) -> None:
-        """Stol yopilganda hisobotni ikkinchi monitorda rasmlar bilan ko\'rsatadi."""
+        """Hisobot: mijoz monitorida. Preview da operator fokusini olmasin."""
+        preview = bool(payload.get('preview'))
+        if payload.get('duration_ms') is not None:
+            try:
+                duration_ms = int(payload.get('duration_ms'))
+            except (TypeError, ValueError):
+                pass
+        if preview:
+            duration_ms = int(payload.get('customer_ms') or duration_ms or 15000)
         try:
-            self.show_on_customer_screen(force=True)
+            screens = QApplication.screens()
+            if len(screens) >= 2:
+                self.show_on_customer_screen(force=False, steal_focus=False)
+            elif not preview:
+                self.show_on_customer_screen(force=True)
         except Exception:
             pass
+        if preview and len(QApplication.screens()) < 2 and not self.isVisible():
+            return
         self._clear_receipt_items()
         self._receipt_body.setText('')
         self._receipt_body.setVisible(False)
@@ -210,11 +226,6 @@ class CustomerDisplayWindow(QWidget):
         extra = float(payload.get('extra') or 0)
         click_amt = float(payload.get('click_amount') or 0)
         cash_amt = float(payload.get('cash_amount') or 0)
-        if payload.get('duration_ms') is not None:
-            try:
-                duration_ms = int(payload.get('duration_ms'))
-            except (TypeError, ValueError):
-                pass
         self._receipt_title.setText(title)
         self._receipt_station.setText(station)
         self._receipt_time.setText(f'PlayStation: {time_rev:,.0f} so\'m')
@@ -273,7 +284,8 @@ class CustomerDisplayWindow(QWidget):
         self._receipt_overlay.setGeometry(self.rect())
         self._receipt_overlay.raise_()
         self._receipt_overlay.show()
-        self.activateWindow()
+        if not preview:
+            self.activateWindow()
         self._receipt_timer.start(max(1000, int(duration_ms)))
     def update_receipt_payment(self, click_amount: float, cash_amount: float) -> None:
         """To\'lov tasdiqlangandan keyin hisob overlayda Click/Naqd ko\'rsatish."""
@@ -390,7 +402,7 @@ class CustomerDisplayWindow(QWidget):
         try:
             payload = self._build_live_receipt(sid, card)
             if payload:
-                self.show_session_receipt(payload, duration_ms=25000)
+                self.show_session_receipt(payload, duration_ms=15000)
         except Exception as e:
             logging.getLogger('customer').warning('Live chek: %s', e)
     def _build_live_receipt(self, sid: str, card: object) -> Optional[dict]:
@@ -447,7 +459,7 @@ class CustomerDisplayWindow(QWidget):
         total = ps_show + goods_show + buy_show
         label_vip = ' (VIP)' if was_vip else ''
         station_title = f'{card.display_name()}{label_vip}'
-        return {'title': 'Joriy hisob', 'station': station_title, 'body_html': '', 'total': total, 'time_rev': ps_show, 'drink_total': goods_show, 'joystick_total': joystick_total, 'buyurtma_total': buy_show, 'extra': extra, 'order_items': order_items, 'duration_ms': 25000, 'preview': True, 'operator_ms': 8000, 'billable_total': ps_show + goods_show}
+        return {'title': 'Joriy hisob', 'station': station_title, 'body_html': '', 'total': total, 'time_rev': ps_show, 'drink_total': goods_show, 'joystick_total': joystick_total, 'buyurtma_total': buy_show, 'extra': extra, 'order_items': order_items, 'duration_ms': 15000, 'customer_ms': 15000, 'preview': True, 'operator_ms': 8000, 'billable_total': ps_show + goods_show}
     def _rebuild(self, ids: list[str]) -> None:
         while self._grid.count():
             item = self._grid.takeAt(0)
@@ -572,79 +584,106 @@ class CustomerDisplayWindow(QWidget):
         labels['total'].setText(f'{total:,.0f}')
 
 
-class OperatorReceiptOverlay(QFrame):
-    """Operator kompyuterida ochiq stol cheki — 8 soniya."""
+class OperatorReceiptOverlay(QWidget):
+    """Operator kompyuterida ochiq stol cheki — 8 soniya (mijoz cheki bilan bir xil)."""
 
-    def __init__(self, parent: QWidget, payload: dict, duration_ms: int = 8000) -> None:
-        super().__init__(parent)
+    def __init__(self, host: QWidget, payload: dict, duration_ms: int = 8000) -> None:
+        super().__init__(None)
         self.setObjectName('OperatorReceiptOverlay')
-        self.setStyleSheet(
-            f'QFrame#OperatorReceiptOverlay {{ background: rgba(15, 23, 42, 0.55); }}'
-            f'QFrame#OpReceiptCard {{ background: #FFFFFF; border-radius: 18px; border: 1px solid #E5E7EB; }}'
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint
         )
-        self.setGeometry(parent.rect() if parent is not None else self.rect())
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.setStyleSheet(
+            f'QWidget#OperatorReceiptOverlay {{ background: rgba(15, 23, 42, 0.72); }}'
+            f'QFrame#ReceiptCard {{ background: #FFFFFF; border-radius: 24px; border: 1px solid #E5E7EB; }}'
+        )
+        win = host.window() if host is not None else None
+        if win is not None:
+            self.setGeometry(win.frameGeometry())
+        elif host is not None:
+            self.setGeometry(host.rect())
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 24, 24, 24)
         lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card = QFrame()
-        card.setObjectName('OpReceiptCard')
-        card.setMinimumWidth(420)
-        card.setMaximumWidth(640)
+        card.setObjectName('ReceiptCard')
+        card.setMinimumWidth(480)
+        card.setMaximumWidth(720)
         cl = QVBoxLayout(card)
         cl.setContentsMargins(20, 16, 20, 16)
         cl.setSpacing(8)
         title = QLabel(str(payload.get('title') or 'Joriy hisob'))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet(f'color: {ACCENT}; font-size: 22px; font-weight: 900;')
+        title.setStyleSheet(f'color: {ACCENT}; font-size: 28px; font-weight: 900;')
         cl.addWidget(title)
         station = QLabel(str(payload.get('station') or ''))
         station.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        station.setStyleSheet(f'color: {TEXT_PRIMARY}; font-size: 18px; font-weight: 800;')
+        station.setStyleSheet(f'color: {TEXT_PRIMARY}; font-size: 22px; font-weight: 800;')
         cl.addWidget(station)
         time_rev = float(payload.get('time_rev') or 0)
         goods = float(payload.get('drink_total') or 0)
-        cl.addWidget(self._line(f'PlayStation: {time_rev:,.0f} so\'m', TEXT_PRIMARY))
-        cl.addWidget(self._line(f'Tovarlar: {goods:,.0f} so\'m', COL_RED))
+        ps = QLabel(f'PlayStation: {time_rev:,.0f} so\'m')
+        ps.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ps.setStyleSheet(f'color: {TEXT_PRIMARY}; font-size: 22px; font-weight: 800;')
+        cl.addWidget(ps)
+        tov = QLabel(f'Tovarlar: {goods:,.0f} so\'m')
+        tov.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tov.setStyleSheet(f'color: {COL_RED}; font-size: 22px; font-weight: 800;')
+        cl.addWidget(tov)
         products, buyurtma_items = receipt_display_items(payload.get('order_items') or [])
         if products:
             head = QLabel('Olingan mahsulotlar:')
-            head.setStyleSheet(f'color: {TEXT_PRIMARY}; font-size: 14px; font-weight: 800;')
+            head.setStyleSheet(f'color: {TEXT_PRIMARY}; font-size: 15px; font-weight: 800;')
             cl.addWidget(head)
             for it in products[:12]:
                 cl.addWidget(self._item_line(it))
         if buyurtma_items:
             head_b = QLabel('Buyurtma:')
-            head_b.setStyleSheet(f'color: {GOLD_COLOR}; font-size: 14px; font-weight: 800;')
+            head_b.setStyleSheet(f'color: {GOLD_COLOR}; font-size: 15px; font-weight: 800;')
             cl.addWidget(head_b)
             for it in buyurtma_items[:8]:
                 cl.addWidget(self._item_line(it))
         extra = float(payload.get('extra') or 0)
         if extra > 0:
-            cl.addWidget(self._line(f'Qo\'shimcha: {extra:,.0f} so\'m', TEXT_SECONDARY))
+            ex = QLabel(f'Qo\'shimcha: {extra:,.0f} so\'m')
+            ex.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            ex.setStyleSheet(f'color: {TEXT_SECONDARY}; font-size: 14px; font-weight: 700;')
+            cl.addWidget(ex)
+        if not products and not buyurtma_items:
+            empty = QLabel('Mahsulotlar: yo\'q')
+            empty.setStyleSheet(f'color: {TEXT_SECONDARY}; font-size: 14px;')
+            cl.addWidget(empty)
         total = float(payload.get('total') or 0)
         jami = QLabel(f'JAMI: {total:,.0f} so\'m')
         jami.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        jami.setStyleSheet(f'color: {COL_GREEN}; font-size: 36px; font-weight: 900;')
+        jami.setStyleSheet(f'color: {COL_GREEN}; font-size: 52px; font-weight: 900; padding: 8px 0;')
         cl.addWidget(jami)
-        hint = QLabel('8 soniya  ·  yopish uchun bosing')
+        pay = QLabel('To\'lov: Click yoki Naq swm')
+        pay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pay.setStyleSheet(
+            f'color: {TEXT_PRIMARY}; font-size: 22px; font-weight: 900;'
+            f'padding: 6px 12px; background: #F1F5F9; border-radius: 10px;'
+        )
+        cl.addWidget(pay)
+        hint = QLabel('Rahmat!  ·  yopish uchun bosing')
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setStyleSheet(f'color: {TEXT_SECONDARY}; font-size: 12px;')
+        hint.setStyleSheet(f'color: {TEXT_SECONDARY}; font-size: 13px; font-weight: 600;')
         cl.addWidget(hint)
         lay.addWidget(card)
-        self.mousePressEvent = lambda ev: self.close_overlay()
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.close_overlay)
         self._timer.start(max(1000, int(duration_ms)))
-        self.raise_()
         self.show()
+        self.raise_()
 
-    @staticmethod
-    def _line(text: str, color: str) -> QLabel:
-        lab = QLabel(text)
-        lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lab.setStyleSheet(f'color: {color}; font-size: 16px; font-weight: 800;')
-        return lab
+    def mousePressEvent(self, event) -> None:
+        self.close_overlay()
+        if event is not None:
+            event.accept()
 
     @staticmethod
     def _item_line(it: dict) -> QLabel:
@@ -653,7 +692,7 @@ class OperatorReceiptOverlay(QFrame):
         cnt = int(it.get('count') or 0)
         extra = f' ×{cnt}' if cnt > 1 else ''
         lab = QLabel(f'{name}{extra}  —  {tot:,.0f} so\'m')
-        lab.setStyleSheet(f'color: {TEXT_PRIMARY}; font-size: 13px;')
+        lab.setStyleSheet(f'color: {TEXT_PRIMARY}; font-size: 14px;')
         return lab
 
     def close_overlay(self) -> None:
@@ -662,19 +701,26 @@ class OperatorReceiptOverlay(QFrame):
         except Exception:
             pass
         self.hide()
-        self.deleteLater()
+        self.close()
+
+
+_OPERATOR_RECEIPT: Optional[OperatorReceiptOverlay] = None
 
 
 def show_operator_receipt(host: QWidget, payload: dict, duration_ms: int = 8000) -> None:
-    """Asosiy oynada ochiq stol chekini 8 soniya ko'rsatish."""
+    """Asosiy (operator) oynada ochiq stol chekini 8 soniya ko'rsatish."""
+    global _OPERATOR_RECEIPT
     if host is None:
         return
-    old = host.findChild(QFrame, 'OperatorReceiptOverlay')
+    old = _OPERATOR_RECEIPT
+    _OPERATOR_RECEIPT = None
     if old is not None:
         try:
             old.close_overlay()
         except Exception:
-            old.deleteLater()
+            try:
+                old.deleteLater()
+            except Exception:
+                pass
     overlay = OperatorReceiptOverlay(host, payload, duration_ms)
-    overlay.setGeometry(host.rect())
-    overlay.raise_()
+    _OPERATOR_RECEIPT = overlay
