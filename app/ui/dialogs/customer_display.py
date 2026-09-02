@@ -408,9 +408,11 @@ class CustomerDisplayWindow(QWidget):
         order_items = []
         goods_total = 0.0
         joystick_total = 0.0
+        buyurtma_total = 0.0
         if session_db_id is not None:
             try:
                 goods_total, joystick_total = db.split_session_charges(sid, session_db_id)
+                buyurtma_total = float(db.get_session_buyurtma_total(sid, session_db_id) or 0)
                 grouped = db.get_session_orders_grouped(session_db_id, sid)
                 for it in grouped:
                     name = it.get('name', '')
@@ -438,12 +440,14 @@ class CustomerDisplayWindow(QWidget):
                 order_items = []
                 goods_total = 0.0
                 joystick_total = 0.0
+                buyurtma_total = 0.0
         ps_show = round_to_thousand(time_rev + joystick_total + extra)
         goods_show = round_to_thousand(goods_total)
-        total = ps_show + goods_show
+        buy_show = round_to_thousand(buyurtma_total)
+        total = ps_show + goods_show + buy_show
         label_vip = ' (VIP)' if was_vip else ''
         station_title = f'{card.display_name()}{label_vip}'
-        return {'title': 'Joriy hisob', 'station': station_title, 'body_html': '', 'total': total, 'time_rev': ps_show, 'drink_total': goods_total, 'joystick_total': joystick_total, 'extra': extra, 'order_items': order_items, 'duration_ms': 25000, 'preview': True}
+        return {'title': 'Joriy hisob', 'station': station_title, 'body_html': '', 'total': total, 'time_rev': ps_show, 'drink_total': goods_show, 'joystick_total': joystick_total, 'buyurtma_total': buy_show, 'extra': extra, 'order_items': order_items, 'duration_ms': 25000, 'preview': True, 'operator_ms': 8000, 'billable_total': ps_show + goods_show}
     def _rebuild(self, ids: list[str]) -> None:
         while self._grid.count():
             item = self._grid.takeAt(0)
@@ -552,11 +556,125 @@ class CustomerDisplayWindow(QWidget):
                 goods, joystick = (0.0, 0.0)
         extra = float(card._extra_amount()) if hasattr(card, '_extra_amount') else 0.0
         from app.core.money import round_to_thousand
+        buyurtma = 0.0
+        if card._session_db_id is not None:
+            try:
+                buyurtma = float(db.get_session_buyurtma_total(sid, card._session_db_id) or 0)
+            except Exception:
+                buyurtma = 0.0
         ps_show = round_to_thousand(ps_amount + joystick + extra)
         goods_show = round_to_thousand(goods)
-        total = ps_show + goods_show
+        total = ps_show + goods_show + round_to_thousand(buyurtma)
         labels['started'].setText(started)
         labels['played'].setText(card._format_seconds(played_seconds))
         labels['ps'].setText(f'{ps_show:,.0f} so\'m')
         labels['goods'].setText(f'{goods_show:,.0f} so\'m')
         labels['total'].setText(f'{total:,.0f}')
+
+
+class OperatorReceiptOverlay(QFrame):
+    """Operator kompyuterida ochiq stol cheki — 8 soniya."""
+
+    def __init__(self, parent: QWidget, payload: dict, duration_ms: int = 8000) -> None:
+        super().__init__(parent)
+        self.setObjectName('OperatorReceiptOverlay')
+        self.setStyleSheet(
+            f'QFrame#OperatorReceiptOverlay {{ background: rgba(15, 23, 42, 0.55); }}'
+            f'QFrame#OpReceiptCard {{ background: #FFFFFF; border-radius: 18px; border: 1px solid #E5E7EB; }}'
+        )
+        self.setGeometry(parent.rect() if parent is not None else self.rect())
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 24, 24, 24)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card = QFrame()
+        card.setObjectName('OpReceiptCard')
+        card.setMinimumWidth(420)
+        card.setMaximumWidth(640)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(20, 16, 20, 16)
+        cl.setSpacing(8)
+        title = QLabel(str(payload.get('title') or 'Joriy hisob'))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(f'color: {ACCENT}; font-size: 22px; font-weight: 900;')
+        cl.addWidget(title)
+        station = QLabel(str(payload.get('station') or ''))
+        station.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        station.setStyleSheet(f'color: {TEXT_PRIMARY}; font-size: 18px; font-weight: 800;')
+        cl.addWidget(station)
+        time_rev = float(payload.get('time_rev') or 0)
+        goods = float(payload.get('drink_total') or 0)
+        cl.addWidget(self._line(f'PlayStation: {time_rev:,.0f} so\'m', TEXT_PRIMARY))
+        cl.addWidget(self._line(f'Tovarlar: {goods:,.0f} so\'m', COL_RED))
+        products, buyurtma_items = receipt_display_items(payload.get('order_items') or [])
+        if products:
+            head = QLabel('Olingan mahsulotlar:')
+            head.setStyleSheet(f'color: {TEXT_PRIMARY}; font-size: 14px; font-weight: 800;')
+            cl.addWidget(head)
+            for it in products[:12]:
+                cl.addWidget(self._item_line(it))
+        if buyurtma_items:
+            head_b = QLabel('Buyurtma:')
+            head_b.setStyleSheet(f'color: {GOLD_COLOR}; font-size: 14px; font-weight: 800;')
+            cl.addWidget(head_b)
+            for it in buyurtma_items[:8]:
+                cl.addWidget(self._item_line(it))
+        extra = float(payload.get('extra') or 0)
+        if extra > 0:
+            cl.addWidget(self._line(f'Qo\'shimcha: {extra:,.0f} so\'m', TEXT_SECONDARY))
+        total = float(payload.get('total') or 0)
+        jami = QLabel(f'JAMI: {total:,.0f} so\'m')
+        jami.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        jami.setStyleSheet(f'color: {COL_GREEN}; font-size: 36px; font-weight: 900;')
+        cl.addWidget(jami)
+        hint = QLabel('8 soniya  ·  yopish uchun bosing')
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet(f'color: {TEXT_SECONDARY}; font-size: 12px;')
+        cl.addWidget(hint)
+        lay.addWidget(card)
+        self.mousePressEvent = lambda ev: self.close_overlay()
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.close_overlay)
+        self._timer.start(max(1000, int(duration_ms)))
+        self.raise_()
+        self.show()
+
+    @staticmethod
+    def _line(text: str, color: str) -> QLabel:
+        lab = QLabel(text)
+        lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lab.setStyleSheet(f'color: {color}; font-size: 16px; font-weight: 800;')
+        return lab
+
+    @staticmethod
+    def _item_line(it: dict) -> QLabel:
+        name = str(it.get('name') or '')
+        tot = float(it.get('total') or 0)
+        cnt = int(it.get('count') or 0)
+        extra = f' ×{cnt}' if cnt > 1 else ''
+        lab = QLabel(f'{name}{extra}  —  {tot:,.0f} so\'m')
+        lab.setStyleSheet(f'color: {TEXT_PRIMARY}; font-size: 13px;')
+        return lab
+
+    def close_overlay(self) -> None:
+        try:
+            self._timer.stop()
+        except Exception:
+            pass
+        self.hide()
+        self.deleteLater()
+
+
+def show_operator_receipt(host: QWidget, payload: dict, duration_ms: int = 8000) -> None:
+    """Asosiy oynada ochiq stol chekini 8 soniya ko'rsatish."""
+    if host is None:
+        return
+    old = host.findChild(QFrame, 'OperatorReceiptOverlay')
+    if old is not None:
+        try:
+            old.close_overlay()
+        except Exception:
+            old.deleteLater()
+    overlay = OperatorReceiptOverlay(host, payload, duration_ms)
+    overlay.setGeometry(host.rect())
+    overlay.raise_()

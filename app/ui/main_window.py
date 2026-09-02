@@ -743,11 +743,18 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning('Mijoz ekrani yangilanmadi: %s', e)
     def _on_session_receipt(self, payload: dict) -> None:
-        """Stol yopilganda hisobot + Click/Naqd; preview da faqat monitor."""
+        """Stol yopilganda hisobot + Click/Naqd; preview da monitor + operator 8s."""
         try:
             self._customer_display.show_session_receipt(payload)
         except Exception as e:
             logger.warning('Hisobot mijoz ekranida chiqmadi: %s', e)
+        if payload.get('preview'):
+            try:
+                from app.ui.dialogs.customer_display import show_operator_receipt
+                host = self.centralWidget() or self
+                show_operator_receipt(host, payload, int(payload.get('operator_ms') or 8000))
+            except Exception as e:
+                logger.warning('Operator cheki: %s', e)
         if payload.get('preview') or payload.get('rollover'):
             if payload.get('rollover'):
                 try:
@@ -760,8 +767,9 @@ class MainWindow(QMainWindow):
                 from PyQt6.QtWidgets import QDialog
                 from app.ui.dialogs.station_dialogs import SessionPaymentDialog
                 import database as db
-                total = float(payload.get('total') or 0)
-                dlg = SessionPaymentDialog(total, station=str(payload.get('station') or ''), time_rev=float(payload.get('time_rev') or 0), goods=float(payload.get('drink_total') or 0) + float(payload.get('extra') or 0), parent=self)
+                billable = payload.get('billable_total')
+                total = float(billable if billable is not None else payload.get('total') or 0)
+                dlg = SessionPaymentDialog(total, station=str(payload.get('station') or ''), time_rev=float(payload.get('time_rev') or 0), goods=float(payload.get('drink_total') or 0), parent=self)
                 if dlg.exec() == QDialog.DialogCode.Accepted:
                     click_amt = dlg.click_amount()
                     cash_amt = dlg.cash_amount()

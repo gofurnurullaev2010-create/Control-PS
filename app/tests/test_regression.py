@@ -119,22 +119,25 @@ class DatabaseCompatTests(unittest.TestCase):
         products, buy = receipt_display_items([{'name': 'Cola', 'item_type': 'drink'}, {'name': 'Jostik', 'item_type': 'joystick'}, {'name': 'X', 'item_type': 'buyurtma'}])
         self.assertEqual([p['name'] for p in products], ['Cola'])
         self.assertEqual([b['name'] for b in buy], ['X'])
-    def test_buyurtma_counts_in_cash_total(self) -> None:
+    def test_buyurtma_excluded_from_cash_and_goods(self) -> None:
         from datetime import datetime, timedelta
         sid = db.list_station_ids()[0]
         session_id = db.start_session_row(sid, total_seconds=3600, is_vip=True)
         db.add_session_buyurtma(sid, session_id, 12000, 'Pizza')
+        goods, joy = db.split_session_charges(sid, session_id)
+        self.assertEqual(goods, 0.0)
+        self.assertEqual(float(db.get_session_buyurtma_total(sid, session_id)), 12000.0)
         now = datetime.now()
         start = (now - timedelta(hours=1)).isoformat(timespec='seconds')
-        db.end_session_row(session_id, 60, 50000)
+        db.end_session_row(session_id, 60, 38000)
         conn = db._connect()
         conn.execute('UPDATE sessions SET end_time = ? WHERE id = ?', (now.isoformat(timespec='seconds'), session_id))
         conn.commit()
         conn.close()
         report = db.operator_report_between(start, (now + timedelta(seconds=2)).isoformat(timespec='seconds'))
         self.assertEqual(float(report.get('buyurtma_total') or 0), 12000.0)
-        self.assertGreaterEqual(float(report.get('total') or 0), 12000.0)
-        self.assertAlmostEqual(float(report['total']), float(report['session_total']) + float(report['drink_total']) + float(report['market_total']) + float(report['joystick_total']) + float(report['buyurtma_total']), delta=0.01)
+        self.assertAlmostEqual(float(report.get('total') or 0), 26000.0, delta=1.0)
+        self.assertAlmostEqual(float(report['total']), float(report['session_total']) + float(report['drink_total']) + float(report['market_total']) + float(report['joystick_total']), delta=0.01)
     def test_vidaa_token_repair_sets_expiry(self) -> None:
         import json
         from app.tv.vidaa_platform import _repair_token_expiry

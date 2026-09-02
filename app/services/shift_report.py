@@ -34,8 +34,8 @@ def enrich_shift_report(report: dict[str, Any]) -> dict[str, Any]:
     market_total = float(out.get('market_total') or 0)
     joystick_total = float(out.get('joystick_total') or 0)
     buyurtma_total = float(out.get('buyurtma_total') or 0)
-    goods_total = drink_total + market_total + buyurtma_total
-    total = float(out.get('total') or session_total + drink_total + market_total + joystick_total + buyurtma_total)
+    goods_total = drink_total + market_total
+    total = float(out.get('total') or session_total + drink_total + market_total + joystick_total)
     expense_total = float(out.get('expense_total') or 0)
     debt_total = float(out.get('debt_total') or 0)
     debt_paid = float(out.get('debt_paid_total') or 0)

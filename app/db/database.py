@@ -703,16 +703,18 @@ def sessions_breakdown_for_day(day: str) -> List[dict[str, Any]]:
     """Kun bo\'yicha yakunlangan seanslar (PS / tovar / jostik ajratilgan).\n\n    Kassa jabıw bilan mos: jostik Playstation tu\'simiga, tovarlar alohida.\n    """
     start, end = business_day_bounds(day)
     conn = _connect()
-    rows = conn.execute('\n        SELECT\n            s.id,\n            s.station_id,\n            s.start_time,\n            s.end_time,\n            s.duration_minutes,\n            COALESCE(s.revenue, 0) AS revenue,\n            COALESCE(s.is_vip, 0) AS is_vip,\n            COALESCE(s.note, \'\') AS note,\n            COALESCE((\n                SELECT SUM(d.price)\n                FROM drink_orders d\n                WHERE d.session_id = s.id\n                  AND lower(COALESCE(d.item_type, \'drink\')) IN (\'drink\', \'market\', \'buyurtma\')\n            ), 0) AS drink_revenue,\n            COALESCE((\n                SELECT SUM(d.price)\n                FROM drink_orders d\n                WHERE d.session_id = s.id\n                  AND lower(COALESCE(d.item_type, \'\')) = \'joystick\'\n            ), 0) AS joystick_revenue\n        FROM sessions s\n        WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n        ORDER BY s.end_time DESC\n        ', (start, end)).fetchall()
+    rows = conn.execute('\n        SELECT\n            s.id,\n            s.station_id,\n            s.start_time,\n            s.end_time,\n            s.duration_minutes,\n            COALESCE(s.revenue, 0) AS revenue,\n            COALESCE(s.is_vip, 0) AS is_vip,\n            COALESCE(s.note, \'\') AS note,\n            COALESCE((\n                SELECT SUM(d.price)\n                FROM drink_orders d\n                WHERE d.session_id = s.id\n                  AND lower(COALESCE(d.item_type, \'drink\')) IN (\'drink\', \'market\')\n            ), 0) AS drink_revenue,\n            COALESCE((\n                SELECT SUM(d.price)\n                FROM drink_orders d\n                WHERE d.session_id = s.id\n                  AND lower(COALESCE(d.item_type, \'\')) = \'joystick\'\n            ), 0) AS joystick_revenue,\n            COALESCE((\n                SELECT SUM(d.price)\n                FROM drink_orders d\n                WHERE d.session_id = s.id\n                  AND lower(COALESCE(d.item_type, \'\')) = \'buyurtma\'\n            ), 0) AS buyurtma_revenue\n        FROM sessions s\n        WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n        ORDER BY s.end_time DESC\n        ', (start, end)).fetchall()
     conn.close()
     out = []
     for r in rows:
         d = dict(r)
         goods = float(d.get('drink_revenue') or 0)
         joy = float(d.get('joystick_revenue') or 0)
+        buy = float(d.get('buyurtma_revenue') or 0)
         total_rev = float(d.get('revenue') or 0)
-        d['session_revenue'] = max(0.0, total_rev - goods - joy)
+        d['session_revenue'] = max(0.0, total_rev - goods - joy - buy)
         d['joystick_revenue'] = joy
+        d['buyurtma_revenue'] = buy
         out.append(d)
     return out
 def get_session_by_id(session_id: int) -> Optional[dict[str, Any]]:
@@ -798,8 +800,8 @@ def revenue_split_for_day(day: str) -> dict[str, float]:
     for r in ended:
         ended_session_time += max(0.0, float(r['revenue'] or 0) - float(r['drink_rev'] or 0))
     joystick_linked = float(conn.execute('\n            SELECT COALESCE(SUM(d.price), 0)\n            FROM drink_orders d\n            JOIN sessions s ON d.session_id = s.id\n            WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n              AND lower(COALESCE(d.item_type, \'\')) = \'joystick\'\n            ', (start, end)).fetchone()[0] or 0)
-    ended_drinks = float(conn.execute('\n            SELECT COALESCE(SUM(d.price), 0)\n            FROM drink_orders d\n            JOIN sessions s ON d.session_id = s.id\n            WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n              AND lower(COALESCE(d.item_type, \'drink\')) IN (\'drink\', \'market\', \'buyurtma\')\n            ', (start, end)).fetchone()[0] or 0)
-    standalone_drinks = float(conn.execute('\n            SELECT COALESCE(SUM(price), 0)\n            FROM drink_orders\n            WHERE session_id IS NULL AND order_time >= ? AND order_time < ?\n              AND lower(COALESCE(item_type, \'drink\')) IN (\'drink\', \'market\', \'buyurtma\')\n            ', (start, end)).fetchone()[0] or 0)
+    ended_drinks = float(conn.execute('\n            SELECT COALESCE(SUM(d.price), 0)\n            FROM drink_orders d\n            JOIN sessions s ON d.session_id = s.id\n            WHERE s.end_time IS NOT NULL AND s.end_time >= ? AND s.end_time < ?\n              AND lower(COALESCE(d.item_type, \'drink\')) IN (\'drink\', \'market\')\n            ', (start, end)).fetchone()[0] or 0)
+    standalone_drinks = float(conn.execute('\n            SELECT COALESCE(SUM(price), 0)\n            FROM drink_orders\n            WHERE session_id IS NULL AND order_time >= ? AND order_time < ?\n              AND lower(COALESCE(item_type, \'drink\')) IN (\'drink\', \'market\')\n            ', (start, end)).fetchone()[0] or 0)
     conn.close()
     session_total = float(ended_session_time) + float(joystick_linked)
     drink_total = float(ended_drinks + standalone_drinks)
@@ -1121,11 +1123,21 @@ def get_session_joystick_total(station_id: str, session_id: Optional[int]=None) 
     for r in rows:
         total += _joystick_line_amount(volume=float(r['volume'] or 0), price=float(r['price'] or 0), order_time=r['order_time'], session_active=session_active, until=now)
     return float(total)
+def get_session_buyurtma_total(station_id: str, session_id: Optional[int]=None) -> float:
+    """Tashqi buyurtma summasi. Mijoz ekrani jamiga kiradi; kassa/daromad/tovarga kirmaydi."""
+    conn = _connect()
+    if session_id is not None:
+        row = conn.execute('\n            SELECT COALESCE(SUM(price), 0)\n            FROM drink_orders\n            WHERE session_id = ? AND item_type = \'buyurtma\'\n            ', (int(session_id),)).fetchone()
+    else:
+        row = conn.execute('\n            SELECT COALESCE(SUM(price), 0)\n            FROM drink_orders\n            WHERE station_id = ? AND session_id IS NULL AND item_type = \'buyurtma\'\n            ', (station_id,)).fetchone()
+    conn.close()
+    return float(row[0] or 0) if row else 0.0
 def split_session_charges(station_id: str, session_id: Optional[int]=None) -> tuple[float, float]:
-    """Seans tovarlari va jostikni ajratadi.\n\n    Jostik puli Playstation summasiga qo\'shiladi, tovarlar ustuniga emas.\n    Qaytaradi: (tovarlar, jostik).\n    """
+    """Seans tovarlari va jostikni ajratadi.\n\n    Jostik — Playstation. Buyurtma kirmaydi (faqat mijoz jamida).\n    Qaytaradi: (tovarlar, jostik).\n    """
     all_amt = float(get_station_drink_total(station_id, session_id) or 0)
     joy = float(get_session_joystick_total(station_id, session_id) or 0)
-    return (max(0.0, all_amt - joy), joy)
+    buy = float(get_session_buyurtma_total(station_id, session_id) or 0)
+    return (max(0.0, all_amt - joy - buy), joy)
 def get_returnable_orders_grouped(session_id: Optional[int], station_id: str) -> List[dict[str, Any]]:
     """Qaytarish uchun ichimlik/market/buyurtma guruhlari.\n\n    drink/market — omborga qaytadi; buyurtma — faqat o\'chiriladi.\n    """
     conn = _connect()
@@ -1354,7 +1366,7 @@ def operator_report_between(start_iso: str, end_iso: str) -> dict[str, Any]:
         market = [dict(r) for r in conn.execute(f"\n                SELECT d.drink_name AS name, d.volume,\n                       COUNT(*) AS count, SUM(d.price) AS total\n                {market_list_sql}\n                GROUP BY d.drink_name, d.volume, d.price\n                ORDER BY d.drink_name\n                ", period).fetchall()]
     finally:
         conn.close()
-    total = session_total + drink_total + market_total + joystick_total + buyurtma_total
+    total = session_total + drink_total + market_total + joystick_total
     return {'period_start': start_iso, 'period_end': end_iso, 'session_total': session_total, 'drink_total': drink_total, 'market_total': market_total, 'joystick_total': joystick_total, 'buyurtma_total': buyurtma_total, 'total': total, 'drinks': drinks, 'market': market}
 def add_debtor(client_name: str, phone: str, amount: float, note: str='') -> int:
     """Yangi qarzdor yozuvi qo\'shish."""
@@ -2018,11 +2030,11 @@ def cash_period_bounds(day: Optional[str]=None) -> tuple[str, str]:
         start = period
     return (start, end)
 def cash_period_revenue(day: Optional[str]=None) -> dict[str, float]:
-    """Joriy kassa davridagi tushum (Playstation + tovarlar + buyurtma)."""
+    """Joriy kassa davridagi tushum (Playstation + tovarlar). Buyurtma kirmaydi."""
     start, end = cash_period_bounds(day)
     report = operator_report_between(start, end)
     joy = float(report.get('joystick_total') or 0)
-    goods = float(report.get('drink_total') or 0) + float(report.get('market_total') or 0) + float(report.get('buyurtma_total') or 0)
+    goods = float(report.get('drink_total') or 0) + float(report.get('market_total') or 0)
     return {'total': float(report.get('total') or 0), 'session_total': float(report.get('session_total') or 0) + joy, 'drink_total': goods, 'joystick_total': joy, 'buyurtma_total': float(report.get('buyurtma_total') or 0), 'period_start': start, 'period_end': end}
 def compute_cash_diff(total_income: float, expense_total: float, debt_total: float, debt_paid_total: float, closing_amount: float) -> tuple[float, float]:
     """Kutilgan summa va kassa farqi.\n\n    expected = tu\'sim - qa\'rejet - qarizlar + qarizin to\'legenler\n    cash_diff = jawılg\'andag\'i summa (naqd+CLICK bo\'lishi mumkin) - expected\n    """
