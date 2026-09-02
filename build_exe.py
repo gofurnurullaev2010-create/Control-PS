@@ -35,11 +35,11 @@ if (ROOT / "assets").is_dir():
     datas.append((str(ROOT / "assets"), "assets"))
 
 existing = sorted(glob.glob(str(ROOT / "dist" / "ControlPS_v*.exe")))
-ver = 198
+ver = int(os.environ.get("CONTROLPS_VERSION", "202"))
 if existing:
     last = Path(existing[-1]).stem
     try:
-        ver = int(last.split("_v")[-1]) + 1
+        ver = max(ver, int(last.split("_v")[-1]) + 1)
     except ValueError:
         pass
 name = f"ControlPS_v{ver}"

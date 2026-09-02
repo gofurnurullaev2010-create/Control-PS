@@ -1,0 +1,43 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "cursor/**"
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip wheel
+          python -m pip install -r requirements.txt
+
+      - name: Verify Qt 6.11.0
+        run: |
+          python -c "from PyQt6.QtCore import QT_VERSION_STR; print('Qt', QT_VERSION_STR); assert QT_VERSION_STR.startswith('6.11'), QT_VERSION_STR"
+
+      - name: Build exe
+        run: python build_exe.py
+
+      - name: Upload exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: ControlPS-exe
+          path: dist/ControlPS_v*.exe
+          if-no-files-found: error
+          retention-days: 14
