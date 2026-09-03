@@ -401,11 +401,11 @@ class StationCard(QFrame):
 
         def _runner() -> None:
             try:
-                if not ignore_busy and (self._busy or gen != self._block_generation):
+                if gen != self._block_generation:
                     return
                 if time.time() < self._suppress_block_until:
                     return
-                if not ignore_busy and (self._busy or gen != self._block_generation):
+                if not ignore_busy and self._busy:
                     return
                 import tv_handler
                 import tv_platforms
@@ -452,7 +452,7 @@ class StationCard(QFrame):
         threading.Thread(target=_runner, daemon=True).start()
 
     def _wake_and_unblock_tv_async(self) -> None:
-        """START: faqat overlay yopish (tez, takroriy power_on yo'q)."""
+        """START: WOL + VIDAA ekranni yonish (fake_sleep)."""
         import threading
         settings = self._port.tv_settings(self.station_id)
         if not settings.tv_ip:
@@ -1450,7 +1450,7 @@ class StationCard(QFrame):
                     import vidaa_platform
                     host = tv_handler.normalize_tv_host(settings.tv_ip)
                     if vidaa_platform.is_vidaa_brand(settings.brand):
-                        if vidaa_platform.power_on(host, settings.tv_mac, wait_s=25.0, brand=settings.brand):
+                        if vidaa_platform.power_on(host, settings.tv_mac, wait_s=50.0, brand=settings.brand):
                             vidaa_platform.set_source(host, settings.tv_mac, settings.hdmi_input, brand=settings.brand)
                     else:
                         if tv_platforms.is_webos_brand(settings.brand):

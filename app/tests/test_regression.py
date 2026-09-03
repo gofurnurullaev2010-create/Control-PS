@@ -169,6 +169,14 @@ class DatabaseCompatTests(unittest.TestCase):
         row = db.get_session_by_id(session_id)
         self.assertAlmostEqual(float(row['revenue'] or 0), 26000.0, delta=0.01)
         self.assertEqual(float(db.get_session_buyurtma_total(sid, session_id)), 0.0)
+    def test_vidaa_standby_state_detects_fake_sleep(self) -> None:
+        from app.tv.vidaa_platform import _state_is_standby
+        self.assertTrue(_state_is_standby({'statetype': 'fake_sleep_0'}))
+        self.assertTrue(_state_is_standby({'statetype': 'fake_sleep'}))
+        self.assertTrue(_state_is_standby({'statetype': 'livetv', 'fake_sleep': 1}))
+        self.assertFalse(_state_is_standby({'statetype': 'livetv'}))
+        self.assertFalse(_state_is_standby(None))
+        self.assertFalse(_state_is_standby({}))
     def test_vidaa_token_repair_sets_expiry(self) -> None:
         import json
         from app.tv.vidaa_platform import _repair_token_expiry

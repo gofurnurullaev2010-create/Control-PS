@@ -74,7 +74,7 @@ def _detect_vidaa_info(host: str) -> dict[str, str]:
         return {}
     url = f"http://{host}:{VIDAA_UPNP_PORT}/MediaServer/rendererdevicedesc.xml"
     try:
-        with urllib.request.urlopen(urllib.request.Request(url), timeout=3.0) as response:
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=1.2) as response:
             xml_content = response.read().decode("utf-8", errors="ignore")
         root = ET.fromstring(xml_content)
         raw: dict[str, str] = {}
@@ -103,12 +103,18 @@ def port_open(host: str, timeout: float = 1.0) -> bool:
         return False
 
 
-def wait_until_online(host: str, timeout_s: float = 12.0) -> bool:
+def wait_until_online(host: str, timeout_s: float = 12.0, mac: str = "") -> bool:
+    """Port ochilishini kutadi; kutish davomida WOL ni takrorlaydi."""
     deadline = time.time() + max(1.0, timeout_s)
+    last_wake = 0.0
     while time.time() < deadline:
         if port_open(host, timeout=0.5):
             return True
-        time.sleep(0.5)
+        now = time.time()
+        if mac and (now - last_wake) >= 2.0:
+            wake(mac, host)
+            last_wake = now
+        time.sleep(0.45)
     return port_open(host, timeout=0.5)
 
 
@@ -224,9 +230,12 @@ def _client(host: str, mac: str = "", brand: str = ""):
         raise
 
     host = (host or "").split(":", 1)[0].strip()
-    info = _detect_vidaa_info(host)
-    device_mac = normalize_mac(mac) or normalize_mac(info.get("mac") or "")
+    device_mac = normalize_mac(mac)
     user_brand = (brand or "").strip()
+    info = {}
+    if not device_mac or not user_brand:
+        info = _detect_vidaa_info(host)
+    device_mac = device_mac or normalize_mac(info.get("mac") or "")
     mqtt_brand = _normalize_mqtt_brand(user_brand or info.get("brand") or "")
     return VidaaTV(
         host=host,
@@ -463,46 +472,112 @@ def _run(host: str, mac: str, fn: Callable, brand: str = "") -> bool:
             pass
 
 
-def _safe_wake_if_fake_sleep(host: str, mac: str, brand: str = "") -> bool:
-    def _wake(tv) -> bool:
-        state = tv.get_state(timeout=3.0)
-        if state and state.get("statetype") == "fake_sleep_0":
-            return bool(tv.send_key("KEY_POWER"))
+def _state_is_standby(state: Optional[dict]) -> bool:
+    """Hisense/Toshiba: ekran o'chiq, MQTT esa ochiq (fake_sleep)."""
+    if not isinstance(state, dict) or not state:
+        return False
+    st = str(state.get("statetype") or "").strip().lower()
+    if "fake_sleep" in st or "standby" in st or st in ("off", "sleep"):
         return True
+    flag = state.get("fake_sleep")
+    if flag is True or str(flag).strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    return False
 
-    return _run(host, mac, _wake, brand)
+
+def _wake_screen(tv) -> bool:
+    """Ekranni yoqish: kutubxona power_on + fake_sleep qolsa KEY_POWER."""
+    try:
+        tv.power_on()
+    except Exception as e:
+        logger.debug("VIDAA power_on: %s", e)
+        try:
+            tv.send_key("KEY_POWER")
+        except Exception:
+            return False
+    time.sleep(1.6)
+    state = None
+    try:
+        state = tv.get_state(timeout=4.0)
+    except Exception:
+        state = None
+    if _state_is_standby(state):
+        logger.info("VIDAA hali fake_sleep: %s — KEY_POWER", getattr(tv, "host", ""))
+        try:
+            tv.send_key("KEY_POWER")
+        except Exception:
+            return False
+        time.sleep(2.0)
+        try:
+            state = tv.get_state(timeout=4.0)
+        except Exception:
+            state = None
+    if _state_is_standby(state):
+        return False
+    return True
 
 
 def power_on(host: str, mac: str, *, wait_s: float = 45.0, brand: str = "") -> bool:
+    """START: WOL (takror) + MQTT orqali ekranni yonish (fake_sleep ham)."""
     host = (host or "").split(":", 1)[0].strip()
     if not mac:
         logger.warning("VIDAA START: MAC yo'q — Wake-on-LAN ishlamaydi (%s)", host)
     if mac:
         wake(mac, host)
-    if not wait_until_online(host, timeout_s=wait_s):
+    if not wait_until_online(host, timeout_s=wait_s, mac=mac):
         logger.warning("VIDAA START: TV online bo'lmadi: %s", host)
         return False
-    _safe_wake_if_fake_sleep(host, mac, brand)
-    return True
+    last_err = ""
+    for attempt in range(1, 6):
+        try:
+            tv = _client(host, mac, brand)
+        except ImportError:
+            return False
+        try:
+            if not _connect_ready(tv, timeout=15.0):
+                last_err = "MQTT ulanmadi"
+                logger.warning("VIDAA START urinish %s: %s (%s)", attempt, last_err, host)
+            elif _wake_screen(tv):
+                logger.info("VIDAA ekran yonildi: %s (urinish %s)", host, attempt)
+                return True
+            else:
+                last_err = "fake_sleep / ekran o'chiq"
+                logger.warning("VIDAA START urinish %s: %s (%s)", attempt, last_err, host)
+        except Exception as e:
+            last_err = str(e)
+            logger.warning("VIDAA START xato %s urinish %s: %s", host, attempt, e)
+        finally:
+            try:
+                tv.disconnect()
+            except Exception:
+                pass
+        if mac:
+            wake(mac, host)
+        time.sleep(1.4)
+    logger.warning("VIDAA START: ekran yonmadi %s (%s)", host, last_err or "noma'lum")
+    return False
 
 
 def power_off(host: str, mac: str = "", brand: str = "") -> bool:
+    """STOP: bitta KEY_POWER (fake_sleep). Ikkinchi marta yuborilsa yana yonadi."""
     host = (host or "").split(":", 1)[0].strip()
     if not port_open(host, timeout=1.2):
         return True
 
     def _off(tv) -> bool:
-        if tv.power_off():
+        try:
+            if tv.power_off():
+                return True
+        except Exception as e:
+            logger.debug("VIDAA power_off: %s", e)
+        state = None
+        try:
+            state = tv.get_state(timeout=3.0)
+        except Exception:
+            state = None
+        if _state_is_standby(state):
             return True
-        if not port_open(host, timeout=0.8):
-            return True
-        ok = bool(tv.send_key("KEY_POWER"))
-        if ok and port_open(host, timeout=1.5):
-            try:
-                tv.power_off()
-            except Exception:
-                pass
-        return ok
+        return bool(tv.send_key("KEY_POWER"))
 
     return _run(host, mac, _off, brand)
 
@@ -558,7 +633,7 @@ def set_source(host: str, mac: str, hdmi_input: int, brand: str = "") -> bool:
         from vidaa.topics import TOPIC_SET_SOURCE, get_topic
 
         topic = get_topic(TOPIC_SET_SOURCE, tv.client_id)
-        for delay in (2.0, 4.0, 7.0, 10.0):
+        for delay in (1.5, 3.0, 5.0):
             time.sleep(delay)
             for payload in candidates:
                 ok = bool(tv._publish(topic, payload)) or ok
