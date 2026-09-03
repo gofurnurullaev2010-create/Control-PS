@@ -14,14 +14,22 @@ DB_PATH = app_dir() / 'control_ps.db'
 MIN_STATIONS = 1
 MAX_STATIONS = 50
 WALKIN_STATION_ID = 'DOKON'
+_DB_DIR_READY = False
+_DB_PRAGMA_READY = False
 def _connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    global _DB_DIR_READY, _DB_PRAGMA_READY
+    if not _DB_DIR_READY:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _DB_DIR_READY = True
+    conn = sqlite3.connect(str(DB_PATH), timeout=8.0)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
-    conn.execute('PRAGMA journal_mode = WAL')
-    conn.execute('PRAGMA synchronous = NORMAL')
-    conn.execute('PRAGMA busy_timeout = 30000')
+    conn.execute('PRAGMA busy_timeout = 8000')
+    if not _DB_PRAGMA_READY:
+        conn.execute('PRAGMA journal_mode = WAL')
+        conn.execute('PRAGMA synchronous = NORMAL')
+        conn.execute('PRAGMA temp_store = MEMORY')
+        _DB_PRAGMA_READY = True
     return conn
 def check_database_integrity() -> bool:
     """Baza buzilgan bo\'lsa logga yozadi (yillar davomida ma\'lumotni himoya qilish)."""
@@ -1133,11 +1141,38 @@ def get_session_buyurtma_total(station_id: str, session_id: Optional[int]=None) 
     conn.close()
     return float(row[0] or 0) if row else 0.0
 def split_session_charges(station_id: str, session_id: Optional[int]=None) -> tuple[float, float]:
-    """Seans tovarlari va jostikni ajratadi.\n\n    Jostik — Playstation. Buyurtma kirmaydi (faqat mijoz jamida).\n    Qaytaradi: (tovarlar, jostik).\n    """
-    all_amt = float(get_station_drink_total(station_id, session_id) or 0)
-    joy = float(get_session_joystick_total(station_id, session_id) or 0)
-    buy = float(get_session_buyurtma_total(station_id, session_id) or 0)
-    return (max(0.0, all_amt - joy - buy), joy)
+    """Seans tovarlari va jostikni ajratadi (bitta ulanish).
+
+    Jostik — Playstation. Buyurtma kirmaydi (faqat mijoz jamida).
+    Qaytaradi: (tovarlar, jostik).
+    """
+    conn = _connect()
+    try:
+        session_active = False
+        if session_id is not None:
+            srow = conn.execute('SELECT end_time FROM sessions WHERE id = ?', (int(session_id),)).fetchone()
+            session_active = bool(srow) and srow['end_time'] is None
+            rows = conn.execute('\n                SELECT volume, price, order_time, item_type\n                FROM drink_orders\n                WHERE session_id = ?\n                ', (int(session_id),)).fetchall()
+        else:
+            rows = conn.execute('\n                SELECT volume, price, order_time, item_type\n                FROM drink_orders\n                WHERE station_id = ? AND session_id IS NULL\n                ', (station_id,)).fetchall()
+    finally:
+        conn.close()
+    try:
+        from app.core.network_time import trusted_now_naive
+        now = trusted_now_naive()
+    except Exception:
+        now = datetime.now()
+    goods = 0.0
+    joy = 0.0
+    for r in rows:
+        itype = str(r['item_type'] or '')
+        if itype == 'buyurtma':
+            continue
+        if itype == 'joystick':
+            joy += _joystick_line_amount(volume=float(r['volume'] or 0), price=float(r['price'] or 0), order_time=r['order_time'], session_active=session_active, until=now)
+        else:
+            goods += float(r['price'] or 0)
+    return (max(0.0, goods), float(joy))
 def get_returnable_orders_grouped(session_id: Optional[int], station_id: str) -> List[dict[str, Any]]:
     """Qaytarish uchun ichimlik/market/buyurtma guruhlari.\n\n    drink/market — omborga qaytadi; buyurtma — faqat o\'chiriladi.\n    """
     conn = _connect()
@@ -1753,6 +1788,8 @@ def remember_expense_custom_type(name: str) -> None:
         names = [n for n in names if n.casefold() != low]
         names.insert(0, name)
         _save_name_list(_EXPENSE_CUSTOM_TYPES_KEY, names[:80])
+def _is_safe_wallet(wallet: str) -> bool:
+    return str(wallet or '').strip().lower() in ['safe', 'ceyf', 'сейф']
 def add_expense(expense_type: str, amount: float, wallet: str='cash', note: str='') -> int:
     """Yangi xarajat yozuvi qo\'shish. Ceyf (safe) dan chiqsa balans kamayadi."""
     etype = (expense_type or '').strip()
@@ -1770,9 +1807,40 @@ def add_expense(expense_type: str, amount: float, wallet: str='cash', note: str=
             conn.commit()
             new_id = int(cur.lastrowid)
             conn.close()
-            if wallet_value.lower() in ['safe', 'ceyf', 'сейф']:
+            if _is_safe_wallet(wallet_value):
                 add_to_safe_balance(-amount)
             return new_id
+def get_expense(expense_id: int) -> Optional[dict[str, Any]]:
+    conn = _connect()
+    row = conn.execute('\n        SELECT id, expense_type, amount, wallet, note, created_time\n        FROM expenses WHERE id = ?\n        ', (int(expense_id),)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+def update_expense(expense_id: int, expense_type: str, amount: float) -> dict[str, Any]:
+    """Nomi va summasini o\'zgartirish. Ceyf xarajatida balans farqqa moslanadi."""
+    etype = (expense_type or '').strip()
+    if not etype:
+        raise ValueError('Qa\'rejet turi kiritilmadi.')
+    new_amount = round_to_thousand(amount)
+    if new_amount <= 0:
+        raise ValueError('Summa 0 dan katta bo\'lishi kerak (minglik).')
+    conn = _connect()
+    row = conn.execute('\n        SELECT id, expense_type, amount, wallet, note, created_time\n        FROM expenses WHERE id = ?\n        ', (int(expense_id),)).fetchone()
+    if row is None:
+        conn.close()
+        raise ValueError('Qa\'rejet topilmadi.')
+    old_amount = float(row['amount'] or 0)
+    wallet_value = str(row['wallet'] or 'cash')
+    conn.execute('\n        UPDATE expenses SET expense_type = ?, amount = ? WHERE id = ?\n        ', (etype, new_amount, int(expense_id)))
+    conn.commit()
+    conn.close()
+    if _is_safe_wallet(wallet_value):
+        delta = old_amount - new_amount
+        if abs(delta) >= 0.5:
+            add_to_safe_balance(delta)
+    updated = get_expense(int(expense_id))
+    if not updated:
+        raise ValueError('Qa\'rejet yangilanmadi.')
+    return updated
 def purge_old_expenses(keep_days: int=30) -> int:
     """1 oydan eski xarajatlarni o\'chirish.\n\n    Ochilgan kassa davridagi yozuvlar saqlanadi (jabıw hisobi buzilmasin).\n    """
     cutoff = (datetime.now() - timedelta(days=max(1, int(keep_days)))).isoformat(timespec='seconds')
@@ -1822,7 +1890,7 @@ def expense_day_summary(keep_days: int=30) -> List[dict[str, Any]]:
     purge_old_expenses(keep_days)
     cutoff_day = (datetime.now() - timedelta(days=max(1, int(keep_days)))).date().isoformat()
     conn = _connect()
-    rows = conn.execute('\n        SELECT date(created_time) AS day,\n               COALESCE(SUM(amount), 0) AS total,\n               COUNT(*) AS count\n        FROM expenses\n        WHERE date(created_time) >= ?\n          AND lower(COALESCE(NULLIF(trim(wallet), \'\'), \'cash\')) NOT IN (\'safe\', \'ceyf\')\n        GROUP BY date(created_time)\n        ORDER BY day DESC\n        ', (cutoff_day,)).fetchall()
+    rows = conn.execute('\n        SELECT date(created_time) AS day,\n               COALESCE(SUM(amount), 0) AS total,\n               COUNT(*) AS count\n        FROM expenses\n        WHERE date(created_time) >= ?\n          AND lower(COALESCE(NULLIF(trim(wallet), \'\'), \'cash\')) NOT IN (\'safe\', \'ceyf\', \'сейф\')\n        GROUP BY date(created_time)\n        ORDER BY day DESC\n        ', (cutoff_day,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 def expense_total_between(start_iso: str, end_iso: str, wallet: Optional[str]='cash') -> float:
@@ -1831,10 +1899,10 @@ def expense_total_between(start_iso: str, end_iso: str, wallet: Optional[str]='c
     if wallet is None:
         row = conn.execute('\n            SELECT COALESCE(SUM(amount), 0)\n            FROM expenses\n            WHERE created_time >= ? AND created_time < ?\n            ', (start_iso, end_iso)).fetchone()
     else:
-        if str(wallet).lower() in ['safe', 'ceyf']:
-            row = conn.execute('\n            SELECT COALESCE(SUM(amount), 0)\n            FROM expenses\n            WHERE created_time >= ? AND created_time < ?\n              AND lower(wallet) IN (\'safe\', \'ceyf\')\n            ', (start_iso, end_iso)).fetchone()
+        if str(wallet).lower() in ['safe', 'ceyf', 'сейф']:
+            row = conn.execute('\n            SELECT COALESCE(SUM(amount), 0)\n            FROM expenses\n            WHERE created_time >= ? AND created_time < ?\n              AND lower(wallet) IN (\'safe\', \'ceyf\', \'сейф\')\n            ', (start_iso, end_iso)).fetchone()
         else:
-            row = conn.execute('\n            SELECT COALESCE(SUM(amount), 0)\n            FROM expenses\n            WHERE created_time >= ? AND created_time < ?\n              AND lower(COALESCE(NULLIF(trim(wallet), \'\'), \'cash\')) NOT IN (\'safe\', \'ceyf\')\n            ', (start_iso, end_iso)).fetchone()
+            row = conn.execute('\n            SELECT COALESCE(SUM(amount), 0)\n            FROM expenses\n            WHERE created_time >= ? AND created_time < ?\n              AND lower(COALESCE(NULLIF(trim(wallet), \'\'), \'cash\')) NOT IN (\'safe\', \'ceyf\', \'сейф\')\n            ', (start_iso, end_iso)).fetchone()
     conn.close()
     return float(row[0] or 0)
 def purge_old_clicks(keep_days: int=7) -> int:

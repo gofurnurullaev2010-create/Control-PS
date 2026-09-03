@@ -241,7 +241,6 @@ def get_license_status() -> LicenseStatus:
     """Admin panel MUDDAT bo\'limi uchun to\'liq litsenziya ma\'lumoti."""
     hwid = get_hwid()
     nt = get_network_time()
-    nt.sync()
     today = trusted_today()
     now = nt.now()
     if nt.is_online():

@@ -20,6 +20,8 @@ class FinanceService:
         return self._repo.list_expenses(search)
     def add_expense(self, expense_type: str, amount: float, wallet: str='cash', note: str='') -> int:
         return self._repo.add_expense(expense_type, amount, wallet, note)
+    def update_expense(self, expense_id: int, expense_type: str, amount: float) -> dict[str, Any]:
+        return self._repo.update_expense(expense_id, expense_type, amount)
     def balance_summary(self) -> dict[str, float]:
         """Balans: Kassa = jabıw kutilgan summa; Ceyf; Uliwmalıq = ceyf+kassa."""
         try:

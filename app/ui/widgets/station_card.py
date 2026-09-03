@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import QApplication, QComboBox, QDialog, QDialogButtonBox, 
 from app.tv.tv_handler import TVHandler
 from app.services.station_card_port import make_station_card_port
 from app.core.network_time import trusted_now_naive
-from app.core.ps_billing import billable_seconds as _ps_billable_seconds, live_playstation_amount, parse_session_dt, playstation_amount, wall_seconds as _ps_wall_seconds
+from app.core.ps_billing import billable_seconds as _ps_billable_seconds, parse_session_dt, playstation_amount, wall_seconds as _ps_wall_seconds
 from app.ui.dialogs.station_dialogs import BuyurtmaDialog, TransferTimeDialog, VIPStartDialog, VolumeDialog
 from app.ui.widgets.grid_helpers import JOYSTICK_FREE_COUNT, TRANSFER_ICON_FILE, right_cluster_width, station_col_widths
 logger = logging.getLogger(__name__)
@@ -63,11 +63,7 @@ class SessionTimer(QThread):
         start_mono = _time.monotonic() - float(self._initial_elapsed)
         last_elapsed = self._initial_elapsed - 1
         while self._running:
-            for _ in range(5):
-                if not self._running:
-                    break
-                else:
-                    self.msleep(100)
+            self.msleep(400)
             if not self._running:
                 break
             elapsed = max(0, int(_time.monotonic() - start_mono))
@@ -110,6 +106,9 @@ class StationCard(QFrame):
         self._joystick_count = JOYSTICK_FREE_COUNT
         self._session_start_dt = None
         self._session_billing_rate = 0.0
+        self._charges_cache = (0.0, 0.0)
+        self._charges_cache_mono = 0.0
+        self._hdmi_cached = None
         self._block_generation = 0
         self._suppress_block_until = 0.0
         self._tv_viewing = False
@@ -314,20 +313,7 @@ class StationCard(QFrame):
                 rem = max(0, self._total_seconds - self._elapsed)
                 self._col_played.setText(self._format_seconds(rem))
             ps_amount = self._ps_live_amount()
-            goods_total = 0.0
-            joystick_total = 0.0
-            if self._session_db_id is not None:
-                try:
-                    import database as _db
-                    goods_total, joystick_total = _db.split_session_charges(self.station_id, self._session_db_id)
-                except Exception:
-                    drink_total = self._port.drink_total(self.station_id, self._session_db_id)
-                    joystick_total = self._port.joystick_total(self.station_id, self._session_db_id)
-                    try:
-                        buy = float(_db.get_session_buyurtma_total(self.station_id, self._session_db_id) or 0)
-                    except Exception:
-                        buy = 0.0
-                    goods_total = max(0.0, float(drink_total) - float(joystick_total) - buy)
+            goods_total, joystick_total = self._session_goods_joy()
             extra = self._extra_amount()
             from app.core.money import round_to_thousand
             ps_show = round_to_thousand(ps_amount + joystick_total + extra)
@@ -336,6 +322,36 @@ class StationCard(QFrame):
             self._col_ps.setText(f'{ps_show:,.0f}')
             self._col_goods.setText(f'{goods_show:,.0f}')
             self._col_total.setText(f'{total:,.0f}')
+    def _invalidate_charges_cache(self) -> None:
+        self._charges_cache_mono = 0.0
+    def _session_goods_joy(self, *, force: bool=False) -> tuple[float, float]:
+        """Tovar/jostik: 0.8s kesh — har soniya SQLite ochilmasin."""
+        import time
+        now = time.monotonic()
+        if (not force) and self._session_db_id is not None and (now - float(self._charges_cache_mono or 0)) < 0.8:
+            return self._charges_cache
+        goods_total = 0.0
+        joystick_total = 0.0
+        if self._session_db_id is not None:
+            try:
+                import database as _db
+                goods_total, joystick_total = _db.split_session_charges(self.station_id, self._session_db_id)
+            except Exception:
+                try:
+                    drink_total = self._port.drink_total(self.station_id, self._session_db_id)
+                    joystick_total = self._port.joystick_total(self.station_id, self._session_db_id)
+                    buy = 0.0
+                    try:
+                        buy = float(_db.get_session_buyurtma_total(self.station_id, self._session_db_id) or 0)
+                    except Exception:
+                        buy = 0.0
+                    goods_total = max(0.0, float(drink_total) - float(joystick_total) - buy)
+                except Exception:
+                    goods_total = 0.0
+                    joystick_total = 0.0
+        self._charges_cache = (float(goods_total), float(joystick_total))
+        self._charges_cache_mono = now
+        return self._charges_cache
     def _arm_unblock_protection(self) -> None:
         """START dan keyin sticky bloklash overlay ni qayta yopmasin."""
         import time
@@ -555,11 +571,13 @@ class StationCard(QFrame):
         self.btn_tv_view.setToolTip('TV ON' if self._tv_viewing else 'TV OFF')
         self._stop_btn.setVisible(busy)
         self._stop_btn.setEnabled(True)
-        hdmi = 0
-        if busy:
+        hdmi = int(self._hdmi_cached or 0)
+        if busy and self._hdmi_cached is None:
             try:
-                hdmi = self._port.tv_settings(self.station_id).hdmi_input
+                self._hdmi_cached = int(self._port.tv_settings(self.station_id).hdmi_input or 0)
+                hdmi = int(self._hdmi_cached or 0)
             except Exception:
+                self._hdmi_cached = 0
                 hdmi = 0
         if busy and hdmi:
             self._hdmi_lbl.setText(f'⎙ {hdmi}')
@@ -952,6 +970,7 @@ class StationCard(QFrame):
         try:
             from app.ui.dialogs.combined_shop_panel import CombinedShopPanel
             CombinedShopPanel(self.station_id, self._session_db_id, self).exec()
+            self._invalidate_charges_cache()
             self._refresh_columns()
             win = self.window()
             if hasattr(win, '_refresh_today_revenue_banner'):
@@ -1042,8 +1061,16 @@ class StationCard(QFrame):
             rate = resolve_billing_rate(station_id, start, self._session_billing_rate or None)
             return round(time_amount(rate, int(elapsed_seconds)), 2)
     def _ps_live_amount(self) -> float:
-        """Jonli PLAYSTATION ustuni — faqat START→hozir × qulflangan tarif."""
-        return float(live_playstation_amount(self.station_id, is_vip=bool(self._vip_open), start=self._session_start_dt, now=trusted_now_naive(), booked_seconds=int(self._total_seconds or 0), locked_rate=self._session_billing_rate or None))
+        """Jonli PLAYSTATION ustuni — qulflangan tarif, bazaga har soniya bormaslik."""
+        from app.core.ps_billing import time_amount, wall_seconds
+        now = trusted_now_naive()
+        seconds = wall_seconds(self._session_start_dt, now)
+        rate = float(self._session_billing_rate or 0)
+        if rate <= 0:
+            from app.core.ps_billing import resolve_billing_rate
+            rate = resolve_billing_rate(self.station_id, self._session_start_dt, None)
+            self._session_billing_rate = rate
+        return float(time_amount(rate, seconds))
     def _ps_final_amount(self, *, was_vip: bool, start_dt: Optional[datetime], end_dt: datetime, booked_seconds: int, locked_rate: Optional[float]=None) -> float:
         """STOP / rollover — yagona yakuniy PS summasi."""
         return float(playstation_amount(self.station_id, is_vip=was_vip, start=start_dt, end=end_dt, booked_seconds=booked_seconds, locked_rate=locked_rate if locked_rate is not None else self._session_billing_rate or None))
@@ -1170,6 +1197,7 @@ class StationCard(QFrame):
             except Exception as e:
                 QMessageBox.critical(self, 'Buyurtma', str(e))
                 return
+            self._invalidate_charges_cache()
             if self._vip_open:
                 self._update_vip_sum_label()
             self._refresh_columns()
@@ -1184,23 +1212,12 @@ class StationCard(QFrame):
         finally:
             self._buyurtma_dialog_open = False
     def _update_vip_sum_label(self) -> None:
-        """VIP seans uchun summalar va ichimliklarni real-vaqtda hisoblab turish."""
+        """VIP seans uchun summalar (yashirin label bo\'lsa hisoblanmasin)."""
+        if not self._vip_sum.isVisible():
+            return
         t = self._ps_live_amount()
         ex = self._extra_amount()
-        goods_total = 0.0
-        joystick_total = 0.0
-        if self._session_db_id is not None:
-            try:
-                import database as _db
-                goods_total, joystick_total = _db.split_session_charges(self.station_id, self._session_db_id)
-            except Exception:
-                drink_total = self._port.drink_total(self.station_id, self._session_db_id)
-                joystick_total = self._port.joystick_total(self.station_id, self._session_db_id)
-                try:
-                    buy = float(_db.get_session_buyurtma_total(self.station_id, self._session_db_id) or 0)
-                except Exception:
-                    buy = 0.0
-                goods_total = max(0.0, float(drink_total) - float(joystick_total) - buy)
+        goods_total, joystick_total = self._session_goods_joy()
         from app.core.money import round_to_thousand
         jami = round_to_thousand(t + ex + goods_total + joystick_total)
         self._vip_sum.setText(f'💰 {jami:,.0f} so\'m  (Vaqt {round_to_thousand(t + joystick_total):,.0f} + Ichimlik {round_to_thousand(goods_total):,.0f} + Qo\'shimcha {round_to_thousand(ex):,.0f})')
@@ -1383,7 +1400,6 @@ class StationCard(QFrame):
             self._elapsed = synced
             rem = max(0, self._total_seconds - synced)
             self._timer_lbl.setText(self._format_seconds(rem))
-            self._sync_action_buttons()
             self._refresh_columns()
     def _on_ovoz_clicked(self) -> None:
         """OVOZ tugmasi bosilganda - volume dialog EKRAN markazida ochish."""
@@ -1462,6 +1478,7 @@ class StationCard(QFrame):
                 QMessageBox.critical(self, 'Xatolik', f'Jostik qo\'shishda xatolik: {e}')
                 return None
             self._joystick_count = next_count
+            self._invalidate_charges_cache()
             self._sync_action_buttons()
             self._refresh_columns()
             try:

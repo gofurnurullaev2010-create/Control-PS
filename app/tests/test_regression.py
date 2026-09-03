@@ -80,6 +80,22 @@ class DatabaseCompatTests(unittest.TestCase):
         safe_exp = db.expense_total_between(start, end, wallet='safe')
         self.assertGreaterEqual(safe_exp, 3000.0)
         self.assertEqual(db.expense_total_between(start, end, wallet='cash'), cash_exp)
+    def test_update_expense_name_and_amount_adjusts_ceyf(self) -> None:
+        before = db.get_safe_balance()
+        db.add_to_safe_balance(20000)
+        eid = db.add_expense('Abet', 5000, 'safe', 'osh')
+        self.assertAlmostEqual(db.get_safe_balance(), before + 15000, delta=0.01)
+        updated = db.update_expense(eid, 'Abet kechki', 8000)
+        self.assertEqual(updated['expense_type'], 'Abet kechki')
+        self.assertEqual(float(updated['amount']), 8000.0)
+        self.assertAlmostEqual(db.get_safe_balance(), before + 12000, delta=0.01)
+        cash_id = db.add_expense('Rasul', 4000, 'cash')
+        cash_before = db.get_safe_balance()
+        db.update_expense(cash_id, 'Rasul 2', 6000)
+        self.assertAlmostEqual(db.get_safe_balance(), cash_before, delta=0.01)
+        rows = db.list_expenses('Rasul 2')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(float(rows[0]['amount']), 6000.0)
     def test_joystick_goes_to_playstation_not_goods(self) -> None:
         from datetime import datetime, timedelta
         sid = db.list_station_ids()[0]

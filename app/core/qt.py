@@ -1,7 +1,21 @@
 from __future__ import annotations
 import logging
+import os
 import sys
-from PyQt6.QtCore import QtMsgType, qInstallMessageHandler
+from PyQt6.QtCore import Qt, QCoreApplication, QtMsgType, qInstallMessageHandler
+def configure_qt_app() -> None:
+    """QApplication dan OLDIN: Win10 da UI qotishini kamaytirish."""
+    os.environ.setdefault('QT_ENABLE_HIGHDPI_SCALING', '1')
+    os.environ.setdefault('QT_AUTO_SCREEN_SCALE_FACTOR', '1')
+    try:
+        QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_CompressHighFrequencyEvents, True)
+    except Exception:
+        pass
+    try:
+        from PyQt6.QtGui import QGuiApplication, QHighDpiScaleFactorRoundingPolicy
+        QGuiApplication.setHighDpiScaleFactorRoundingPolicy(QHighDpiScaleFactorRoundingPolicy.PassThrough)
+    except Exception:
+        pass
 def install_exception_hook() -> None:
     """Log unexpected Python exceptions before delegating to Python\'s hook."""
     def _hook(exc_type, exc_value, exc_tb):

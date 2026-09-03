@@ -143,6 +143,54 @@ class ExpenseAddDialog(QDialog):
             self.accept()
     def values(self) -> tuple[str, float, str, str]:
         return (self._resolved_type, float(self.amount.value()), str(self.wallet.currentData() or 'cash'), self.note.text().strip())
+class ExpenseEditDialog(QDialog):
+    """Mavjud qa\'rejet: nomi va summasi."""
+    def __init__(self, row: dict, parent: Optional[QWidget]=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle('Qa\'rejetni o\'zgartiriw')
+        self.setMinimumWidth(420)
+        form = QFormLayout(self)
+        self.name = QLineEdit()
+        self.name.setText(str(row.get('expense_type') or ''))
+        self.amount = QDoubleSpinBox()
+        self.amount.setRange(0, 1000000000)
+        self.amount.setDecimals(0)
+        self.amount.setSingleStep(1000)
+        self.amount.setValue(float(row.get('amount') or 0))
+        try:
+            from app.ui.widgets.money_spin import install_clear_zero_on_edit
+            install_clear_zero_on_edit(self.amount)
+        except Exception:
+            pass
+        wallet = str(row.get('wallet') or 'cash')
+        src = 'Ceyf puli' if wallet.strip().lower() in ['safe', 'ceyf', 'сейф'] else 'Kassa puli'
+        form.addRow('Qa\'rejet turi / atı:', self.name)
+        form.addRow('Summa:', self.amount)
+        form.addRow('Pul deregi:', QLabel(src))
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        save_btn = buttons.button(QDialogButtonBox.StandardButton.Save)
+        cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if save_btn is not None:
+            save_btn.setText('Saqlaw')
+        if cancel_btn is not None:
+            cancel_btn.setText('Biykar etıw')
+        buttons.accepted.connect(self._on_save)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+        self.name.setFocus()
+        self.name.selectAll()
+    def _on_save(self) -> None:
+        if not self.name.text().strip():
+            QMessageBox.warning(self, 'Diqqat', 'Qa\'rejet atın kiritin\'.')
+            self.name.setFocus()
+            return
+        if float(self.amount.value()) <= 0:
+            QMessageBox.warning(self, 'Diqqat', 'Summa 0 dan katta bolsın.')
+            self.amount.setFocus()
+            return
+        self.accept()
+    def values(self) -> tuple[str, float]:
+        return (self.name.text().strip(), float(self.amount.value()))
 class PriceDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

@@ -7,7 +7,7 @@ from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QSplashScreen
 from app.auth import license_manager
 from app.core.paths import resource_path
-from app.core.qt import install_exception_hook
+from app.core.qt import configure_qt_app, install_exception_hook
 from app.core.runtime import ensure_tv_tools_path, setup_logging
 from app.core.single_instance import enforce_single_instance
 from app.db.legacy import init as init_database
@@ -30,6 +30,7 @@ def _qt_message_handler(mode, context, message: str) -> None:
 def main() -> None:
     setup_logging()
     ensure_tv_tools_path()
+    configure_qt_app()
     install_exception_hook()
     qInstallMessageHandler(_qt_message_handler)
     init_database()

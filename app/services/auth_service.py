@@ -29,4 +29,7 @@ class LicenseService:
                 show_warning = False
         return LicenseStatus(valid=lic.valid, hwid=lic.hwid, message=lic.message, show_expiry_warning=show_warning)
     def runtime_check(self) -> LicenseStatus:
-        return self.verify()
+        """Har daqiqa: internet probe qilmaydi (Win10 qotishi)."""
+        from app.auth import license_manager
+        lic = license_manager.verify_license_full()
+        return LicenseStatus(valid=lic.valid, hwid=lic.hwid, message=lic.message, show_expiry_warning=False)

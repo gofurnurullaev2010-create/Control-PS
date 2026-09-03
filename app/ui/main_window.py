@@ -706,8 +706,23 @@ class MainWindow(QMainWindow):
         self._refresh_revenue_banner()
     def _on_refresh_revenue_clicked(self) -> None:
         try:
-            from app.core import network_time
-            network_time.get_network_time().sync(force=True)
+            from PyQt6.QtCore import QThread
+            class _ForceSync(QThread):
+                def run(self) -> None:
+                    try:
+                        from app.core import network_time
+                        network_time.get_network_time().sync(force=True)
+                    except Exception:
+                        return None
+            th = _ForceSync(self)
+            def _after() -> None:
+                self._refresh_revenue_banner()
+                self._refresh_customer_display()
+                if self._current_page in {'cash', 'click', 'active', 'balance'}:
+                    self._refresh_current_page()
+            th.finished.connect(_after)
+            th.start()
+            self._revenue_sync_thread = th
         except Exception:
             pass
         self._refresh_revenue_banner()
@@ -737,9 +752,15 @@ class MainWindow(QMainWindow):
             logger.warning('Mijoz ekrani: %s', e)
     def _refresh_customer_display(self) -> None:
         try:
-            if len(QApplication.screens()) >= 2 and (not self._customer_display.isVisible()):
-                    self._customer_display.show_on_customer_screen()
-            self._customer_display.update_from_cards(self._cards)
+            disp = getattr(self, '_customer_display', None)
+            if disp is None:
+                return
+            screens = QApplication.screens()
+            if len(screens) >= 2 and (not disp.isVisible()):
+                disp.show_on_customer_screen()
+            if not disp.isVisible():
+                return
+            disp.update_from_cards(self._cards)
         except Exception as e:
             logger.warning('Mijoz ekrani yangilanmadi: %s', e)
     def _on_session_receipt(self, payload: dict) -> None:
@@ -815,7 +836,7 @@ class MainWindow(QMainWindow):
         self._clock_timer.start(1000)
         self._customer_timer = QTimer(self)
         self._customer_timer.timeout.connect(self._refresh_customer_display)
-        self._customer_timer.start(1000)
+        self._customer_timer.start(2000)
         self._sync_timer = QTimer(self)
         self._sync_timer.timeout.connect(self._sync_time)
         self._sync_timer.start(120000)

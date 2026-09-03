@@ -84,7 +84,5 @@ def playstation_amount(station_id: str, *, is_vip: bool, start: Optional[datetim
 def live_playstation_amount(station_id: str, *, is_vip: bool, start: Optional[datetime], now: Optional[datetime], booked_seconds: int=0, locked_rate: Optional[float]=None) -> float:
     """Jonli ekran: 0 dan o\'sadi (START→hozir). Vaqtli bron ham o\'ynagan vaqt."""
     seconds = wall_seconds(start, now)
-    if not is_vip and booked_seconds > 0:
-            seconds = min(seconds, int(booked_seconds))
     rate = resolve_billing_rate(station_id, start, locked_rate)
     return time_amount(rate, seconds)

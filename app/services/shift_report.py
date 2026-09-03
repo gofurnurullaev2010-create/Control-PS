@@ -58,9 +58,9 @@ def enrich_shift_report(report: dict[str, Any]) -> dict[str, Any]:
     goods_profit = float(sum((float(p.get('profit') or 0) for p in products)))
     client_count = int(db.count_closed_sessions_between(start, end))
     avg_payment = total / client_count if client_count > 0 else 0.0
-    cash_expenses = [x for x in expenses if str(x.get('wallet') or 'cash').strip().lower() not in ['safe', 'ceyf']]
+    cash_expenses = [x for x in expenses if str(x.get('wallet') or 'cash').strip().lower() not in ['safe', 'ceyf', 'сейф']]
     expense_total = float(sum((float(x.get('amount') or 0) for x in cash_expenses)))
-    expense_safe_total = float(sum((float(x.get('amount') or 0) for x in expenses if str(x.get('wallet') or '').strip().lower() in ['safe', 'ceyf'])))
+    expense_safe_total = float(sum((float(x.get('amount') or 0) for x in expenses if str(x.get('wallet') or '').strip().lower() in ['safe', 'ceyf', 'сейф'])))
     debt_total = float(sum((float(x.get('amount') or 0) for x in debtors)))
     debt_paid = float(sum((float(x.get('amount') or 0) for x in debt_payments)))
     expected, cash_diff = db.compute_cash_diff(total, expense_total, debt_total, debt_paid, closing_with_click)
@@ -132,8 +132,8 @@ def format_shift_details(report: dict[str, Any]) -> str:
     expenses = list(report.get('expenses') or [])
     debtors = list(report.get('debtors') or [])
     payments = list(report.get('debt_payments') or [])
-    cash_expenses = [x for x in expenses if str(x.get('wallet') or 'cash').strip().lower() not in ['safe', 'ceyf']]
-    safe_expenses = [x for x in expenses if str(x.get('wallet') or '').strip().lower() in ['safe', 'ceyf']]
+    cash_expenses = [x for x in expenses if str(x.get('wallet') or 'cash').strip().lower() not in ['safe', 'ceyf', 'сейф']]
+    safe_expenses = [x for x in expenses if str(x.get('wallet') or '').strip().lower() in ['safe', 'ceyf', 'сейф']]
     exp_sum = float(report.get('expense_total') or sum((float(x.get('amount') or 0) for x in cash_expenses)))
     safe_sum = float(report.get('expense_safe_total') or sum((float(x.get('amount') or 0) for x in safe_expenses)))
     debt_sum = float(report.get('debt_total') or sum((float(x.get('amount') or 0) for x in debtors)))

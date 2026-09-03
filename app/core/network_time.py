@@ -26,9 +26,10 @@ def _sync_sign(iso_dt: str, mono: float) -> str:
     payload = f'NTSYNC|{iso_dt}|{mono:.6f}'
     return hmac.new(_SYNC_SECRET.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()[:24].upper()
 def internet_available() -> bool:
+    """Qisqa timeout — UI oqimida chaqirilmasin."""
     for host in ['8.8.8.8', '1.1.1.1']:
         try:
-            with socket.create_connection((host, 53), timeout=1.5):
+            with socket.create_connection((host, 53), timeout=0.4):
                 return True
         except OSError:
             continue
@@ -153,18 +154,20 @@ class NetworkTimeService:
                 last = self._last_network_at
         return (_local_uz_now() - last).total_seconds()
     def is_online(self) -> bool:
-        return internet_available() and self._anchor_real is not None and (self._network_age_sec() <= _ONLINE_FRESH_SEC)
+        """UI uchun: so‘nggi muvaffaqiyatli sinxron yoshiga qarab (socket yo‘q)."""
+        return self.is_synced() and self._network_age_sec() <= _ONLINE_FRESH_SEC
     def is_synced(self) -> bool:
         with self._lock:
             return self._anchor_real is not None
     def now(self) -> datetime:
         with self._lock:
-            pass
-        if self._anchor_real is not None and self._anchor_mono is not None:
-            elapsed = time.monotonic() - self._anchor_mono
+            real = self._anchor_real
+            mono = self._anchor_mono
+        if real is not None and mono is not None:
+            elapsed = time.monotonic() - mono
             if elapsed >= 0:
-                return self._anchor_real + timedelta(seconds=elapsed)
-            return _local_uz_now()
+                return real + timedelta(seconds=elapsed)
+        return _local_uz_now()
     def today(self) -> date:
         return self.now().date()
     def system_date_mismatch(self) -> Optional[int]:

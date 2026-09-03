@@ -4,10 +4,10 @@ from datetime import datetime
 from typing import Any, Callable, Optional
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QMessageBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 import database as db
 from app.ui.dialogs.colors import BG_CARD, BG_HEADER, BORDER_COLOR, COL_RED, TEXT_PRIMARY, TEXT_SECONDARY
-from app.ui.dialogs.finance_dialogs import ExpenseAddDialog
+from app.ui.dialogs.finance_dialogs import ExpenseAddDialog, ExpenseEditDialog
 _CURRENT = '__current__'
 def _fmt_money(v: float) -> str:
     return f'{float(v or 0):,.0f}'.replace(',', ' ')
@@ -59,9 +59,20 @@ class ExpensesPage(QWidget):
         root.addLayout(left)
         mid = QVBoxLayout()
         mid.setSpacing(6)
+        title_row = QHBoxLayout()
         self._title = QLabel('Joriy kassa')
         self._title.setStyleSheet(f'color: {TEXT_PRIMARY}; font-size: 14px; font-weight: 800;')
-        mid.addWidget(self._title)
+        title_row.addWidget(self._title, 1)
+        self._btn_edit = QPushButton('O\'zgartiriw')
+        self._btn_edit.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_edit.setToolTip('Tanlangan qatorning nomi va summasini o\'zgartirish')
+        self._btn_edit.setStyleSheet(f'\n            QPushButton {{\n                background: {BG_HEADER}; color: {TEXT_PRIMARY};\n                border: 1px solid {BORDER_COLOR}; border-radius: 8px;\n                padding: 8px 14px; font-weight: 800;\n            }}\n            QPushButton:hover {{ border: 1px solid {COL_RED}; }}\n            ')
+        self._btn_edit.clicked.connect(self.edit_selected)
+        title_row.addWidget(self._btn_edit)
+        mid.addLayout(title_row)
+        hint = QLabel('Qatorni ikki marta bosing yoki «O\'zgartiriw» — atı va swmması.')
+        hint.setStyleSheet(f'color: {TEXT_SECONDARY}; font-size: 11px; font-weight: 600;')
+        mid.addWidget(hint)
         self.table = QTableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(['Qa\'rejet turi', 'Summa', 'Pul deregi', 'Sipatlama', 'Waqti'])
@@ -75,6 +86,7 @@ class ExpensesPage(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setStyleSheet(f'\n            QTableWidget {{ background: {BG_CARD}; border: 1px solid {BORDER_COLOR}; border-radius: 10px; }}\n            QHeaderView::section {{\n                background: {BG_HEADER}; padding: 8px; border: none;\n                border-bottom: 1px solid {BORDER_COLOR}; font-weight: 800;\n            }}\n            QTableWidget::item:selected {{ background: #E8EDF5; color: {TEXT_PRIMARY}; }}\n            ')
+        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         mid.addWidget(self.table, 1)
         root.addLayout(mid, 1)
         self.reload()
@@ -99,6 +111,33 @@ class ExpensesPage(QWidget):
             self.reload()
             if self._on_changed:
                 self._on_changed()
+    def edit_selected(self) -> None:
+        row = self.table.currentRow()
+        self._edit_row(row)
+    def _on_cell_double_clicked(self, row: int, _col: int) -> None:
+        self._edit_row(row)
+    def _edit_row(self, row: int) -> None:
+        if row < 0 or row >= len(self._rows):
+            QMessageBox.information(self, 'Qa\'rejetler', 'Avval ro\'yxatdan qator tanlan\'.')
+            return
+        rec = self._rows[row]
+        if not rec.get('id'):
+            QMessageBox.warning(self, 'Xatolik', 'Bu qatorni o\'zgartirib bo\'lmaydi.')
+            return
+        dlg = ExpenseEditDialog(rec, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        etype, amount = dlg.values()
+        try:
+            db.update_expense(int(rec['id']), etype, amount)
+            if str(rec.get('expense_type') or '') != etype:
+                db.remember_expense_custom_type(etype)
+        except Exception as e:
+            QMessageBox.critical(self, 'Xatolik', str(e))
+            return
+        self.reload()
+        if self._on_changed:
+            self._on_changed()
     def _reload_days(self) -> None:
         self.days.blockSignals(True)
         self.days.clear()
@@ -150,6 +189,7 @@ class ExpensesPage(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(44)
         for i, r in enumerate(rows):
             type_item = QTableWidgetItem(str(r.get('expense_type') or ''))
+            type_item.setData(Qt.ItemDataRole.UserRole, int(r.get('id') or 0))
             amount_item = QTableWidgetItem(_fmt_money(float(r.get('amount') or 0)))
             amount_item.setForeground(QColor(COL_RED))
             amount_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)

@@ -8,7 +8,7 @@ from app.ui.dialogs.login_dialog import LoginDialog
 from app.core.bootstrap import prepare_runtime
 from app.core.container import build_container
 from app.core.paths import resource_path
-from app.core.qt import install_exception_hook, install_qt_message_handler
+from app.core.qt import configure_qt_app, install_exception_hook, install_qt_message_handler
 from app.core.single_instance import enforce_single_instance
 from app.db.legacy import init as init_database
 from app.ui.main_window import MainWindow
@@ -30,6 +30,7 @@ def _show_splash(app: QApplication) -> QSplashScreen | None:
             return splash
 def main() -> None:
     prepare_runtime()
+    configure_qt_app()
     install_exception_hook()
     install_qt_message_handler()
     init_database()

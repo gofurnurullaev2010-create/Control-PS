@@ -25,6 +25,8 @@ class FinanceRepository:
         return legacy.module().list_current_period_expenses(search)
     def add_expense(self, expense_type: str, amount: float, wallet: str='cash', note: str='') -> int:
         return int(legacy.module().add_expense(expense_type, amount, wallet, note))
+    def update_expense(self, expense_id: int, expense_type: str, amount: float) -> dict[str, Any]:
+        return legacy.module().update_expense(expense_id, expense_type, amount)
     def expense_total_for_day(self, day: Optional[str]=None) -> float:
         return float(legacy.module().expense_total_for_day(day))
     def operator_report_for_day(self, day: Optional[str]=None) -> dict[str, Any]:

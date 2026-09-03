@@ -19,6 +19,14 @@ def test_timed_prepaid_full_booked():
     assert round_to_thousand(time_amount(20000, sec)) == 40000
 def test_sanitize_typo_rate():
     assert sanitize_hourly_rate(150000, 18000) == 15000
+def test_live_overtime_grows_past_booked():
+    start = datetime(2026, 8, 2, 10, 0, 0)
+    end = datetime(2026, 8, 2, 12, 10, 0)
+    from app.core.ps_billing import live_playstation_amount
+    live = live_playstation_amount('STOL-01', is_vip=False, start=start, now=end, booked_seconds=7200, locked_rate=18000)
+    final = playstation_amount('STOL-01', is_vip=False, start=start, end=end, booked_seconds=7200, locked_rate=18000)
+    assert abs(live - final) < 1
+    assert live > time_amount(18000, 7200)
 def test_playstation_amount_locked():
     start = datetime(2026, 8, 1, 19, 47, 0)
     end = datetime(2026, 8, 2, 2, 25, 0)
@@ -28,5 +36,6 @@ if __name__ == '__main__':
     test_vip_overnight_never_seven_thousand()
     test_timed_prepaid_full_booked()
     test_sanitize_typo_rate()
+    test_live_overtime_grows_past_booked()
     test_playstation_amount_locked()
     print('ps_billing OK')
