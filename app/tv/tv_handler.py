@@ -385,6 +385,20 @@ def _main_app_lock_gate_active() -> bool:
 def start_lock_gate_http_server() -> None:
     """Asosiy dastur kirganda chaqiring: port 8099 + /controlps/tv-should-lock."""
     _ensure_http_server()
+def _ensure_lock_gate_firewall() -> None:
+    """TV LAN dan PC :8099 ga kira olsin."""
+    name = 'ControlPS TV lock gate 8099'
+    try:
+        show = subprocess.run(['netsh', 'advfirewall', 'firewall', 'show', 'rule', f'name={name}'], capture_output=True, text=True, timeout=8, creationflags=CREATE_NO_WINDOW)
+        if show.returncode == 0 and '8099' in (show.stdout or ''):
+            return
+        add = subprocess.run(['netsh', 'advfirewall', 'firewall', 'add', 'rule', f'name={name}', 'dir=in', 'action=allow', 'protocol=TCP', 'localport=8099', 'enable=yes', 'profile=any'], capture_output=True, text=True, timeout=8, creationflags=CREATE_NO_WINDOW)
+        if add.returncode == 0:
+            print('[TVHandler] Firewall: TCP 8099 ochildi')
+        else:
+            print('[TVHandler] Firewall 8099 yopiq — tv_port_ochish.bat ni administrator sifatida ishga tushiring')
+    except Exception as e:
+        print(f'[TVHandler] Firewall: {e}')
 _server_started = False
 def _ensure_http_server():
     global _server_started
@@ -392,6 +406,7 @@ def _ensure_http_server():
         return
     else:
         _server_started = True
+        threading.Thread(target=_ensure_lock_gate_firewall, daemon=True, name='cps-fw-8099').start()
         serve_dir = str(_resource_dir())
         _allowed_static = frozenset({'/lock.html', '/lock_screen_bg.png', '/raptor_logo.png'})
         class ControlPSHttpHandler(SimpleHTTPRequestHandler):
@@ -2044,11 +2059,10 @@ class TVHandler:
             switched = False
             if self.hdmi_input:
                 switched = _switch_android_hdmi(adb_path, device, self.hdmi_input, self.brand, dismiss_lock=False)
-            _start_lock_watch_service(adb_path, device)
             if switched:
-                print('[TVHandler] START — PlayStation HDMI')
+                print('[TVHandler] START — PlayStation HDMI (lock to\'xtatildi)')
             else:
-                print('[TVHandler] START — overlay yopildi, HDMI aniqlanmadi')
+                print('[TVHandler] START — lock yopildi, HDMI aniqlanmadi')
     def _artel_safe_wake_to_hdmi(self) -> None:
         """Eski nom — _artel_resume_playstation ga yo\'naltiriladi."""
         self._artel_resume_playstation()

@@ -56,7 +56,7 @@ public class LockOverlayService extends Service {
         super.onCreate();
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         startAsForeground();
-        handler.post(pollRunnable);
+        handler.postDelayed(pollRunnable, 800);
     }
 
     @Override
@@ -97,10 +97,10 @@ public class LockOverlayService extends Service {
                     } else {
                         hideOverlay();
                     }
-                } else if (Boolean.FALSE.equals(lastGateLock)) {
-                    hideOverlay();
-                } else if (lastGateLock == null) {
+                } else if (Boolean.TRUE.equals(lastGateLock)) {
                     showOverlay();
+                } else {
+                    hideOverlay();
                 }
             } catch (Exception ignored) {
             }

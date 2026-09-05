@@ -21,6 +21,12 @@ public class LockActivity extends Activity {
         setContentView(binder.root);
         binder.start();
         binder.root.requestFocus();
+        Boolean need = LockGate.pollShouldLock();
+        if (Boolean.FALSE.equals(need)) {
+            LockOverlayService.ensureRunning(this, false);
+            finish();
+            return;
+        }
         LockOverlayService.ensureRunning(this, true);
     }
 

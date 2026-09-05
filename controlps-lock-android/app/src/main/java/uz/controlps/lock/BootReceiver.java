@@ -8,6 +8,6 @@ import android.content.Intent;
 public class BootReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
-        LockOverlayService.ensureWatching(context);
+        LockOverlayService.ensureRunning(context, true);
     }
 }
