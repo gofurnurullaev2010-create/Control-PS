@@ -288,8 +288,13 @@ def _android_lock_ui_already_foreground(adb_path: str, device: str) -> bool:
             pass
         return False
 def _resource_dir() -> Path:
-    """PyInstaller va development holatida resurs papkasini qaytaradi."""
+    """PyInstaller ichidagi resurslar (_MEIPASS) yoki loyiha papkasi."""
     from app.core.runtime import app_dir
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        p = Path(meipass)
+        if (p / CONTROLPS_LOCK_APK_NAME).is_file() or (p / 'lock.html').is_file():
+            return p
     return app_dir()
 _local_ipCache = None
 def _auto_detect_local_ip() -> str:
@@ -531,11 +536,22 @@ def broadcast_lock_gate_url_to_all_android_tvs() -> None:
                 except OSError:
                     pass
 def _get_adb_path() -> str:
-    """ADB fayl yo\'lini topish."""
+    """ADB fayl yo\'lini topish (SDK, exe yonidagi platform-tools, PATH)."""
+    from app.core.runtime import app_dir
+    extra: list[Path] = []
     adb_in_path = shutil.which('adb')
     if adb_in_path:
-        return adb_in_path
-    extra = []
+        extra.append(Path(adb_in_path))
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        extra.append(Path(meipass) / 'platform-tools' / 'adb.exe')
+    try:
+        base = app_dir()
+        extra.append(base / 'platform-tools' / 'adb.exe')
+        extra.append(base / 'tools' / 'platform-tools' / 'adb.exe')
+        extra.append(base / 'dist' / 'platform-tools' / 'adb.exe')
+    except Exception:
+        pass
     for env_name in ('ANDROID_HOME', 'ANDROID_SDK_ROOT'):
         root = os.environ.get(env_name) or ''
         if root:
@@ -548,24 +564,33 @@ def _get_adb_path() -> str:
         Path('C:/Program Files/platform-tools/adb.exe'),
         Path('C:/Android/platform-tools/adb.exe'),
     ])
+    seen = set()
     for p in extra:
+        key = str(p).lower()
+        if key in seen:
+            continue
+        seen.add(key)
         if p.exists():
             return str(p)
     return 'adb'
 def _get_lock_apk_path() -> Path:
-    """TV ga yuklanadigan APK: ildizdagi controlps-lock.apk yoki eng yangi app-debug.apk."""
-    base = _resource_dir()
-    android_out = base / 'controlps-lock-android' / 'app' / 'build' / 'outputs' / 'apk'
-    candidates = [
-        base / CONTROLPS_LOCK_APK_NAME,
+    """TV ga yuklanadigan APK: exe ichi, ildiz yoki android yig'ish papkasi."""
+    from app.core.runtime import app_dir, bundle_path
+    bundled = bundle_path(CONTROLPS_LOCK_APK_NAME)
+    android_out = app_dir() / 'controlps-lock-android' / 'app' / 'build' / 'outputs' / 'apk'
+    candidates = []
+    if bundled:
+        candidates.append(bundled)
+    candidates.extend([
+        app_dir() / CONTROLPS_LOCK_APK_NAME,
+        _resource_dir() / CONTROLPS_LOCK_APK_NAME,
         android_out / 'release' / 'app-release.apk',
         android_out / 'debug' / 'app-debug.apk',
-    ]
+    ])
     existing = [p for p in candidates if p.exists()]
     if not existing:
         return candidates[0]
-    else:
-        return max(existing, key=lambda p: p.stat().st_mtime)
+    return max(existing, key=lambda p: p.stat().st_mtime)
 def _push_lock_screen_assets_to_tv(adb_path: str, device: str, *, push_html: bool=False) -> None:
     """Fon rasmini /sdcard ga yuboradi (native Lock APK uchun). lock.html faqat ALLOW_LEGACY_HTML_LOCK=1 bo\'lsa."""
     root = _resource_dir()
@@ -838,6 +863,16 @@ def _ensure_controlps_lock_installed(adb_path: str, device: str, *, force: bool=
         install = subprocess.run([adb_path, '-s', device, 'install', '-r', str(apk_path)], capture_output=True, text=True, timeout=90, creationflags=CREATE_NO_WINDOW)
         out = f'{install.stdout or ""}\n{install.stderr or ""}'
         ok = install.returncode == 0 and 'Success' in out
+    if (not ok) and ('INSTALL_FAILED_UPDATE_INCOMPATIBLE' in out or 'signatures do not match' in out.lower()):
+        print('[TVHandler] Eski lock imzo mos emas — o\'chirib qayta o\'rnatiladi')
+        subprocess.run([adb_path, '-s', device, 'uninstall', CONTROLPS_LOCK_PACKAGE], capture_output=True, text=True, timeout=30, creationflags=CREATE_NO_WINDOW)
+        install = subprocess.run([adb_path, '-s', device, 'install', '-r', '-g', str(apk_path)], capture_output=True, text=True, timeout=90, creationflags=CREATE_NO_WINDOW)
+        out = f'{install.stdout or ""}\n{install.stderr or ""}'
+        ok = install.returncode == 0 and 'Success' in out
+        if not ok:
+            install = subprocess.run([adb_path, '-s', device, 'install', '-r', str(apk_path)], capture_output=True, text=True, timeout=90, creationflags=CREATE_NO_WINDOW)
+            out = f'{install.stdout or ""}\n{install.stderr or ""}'
+            ok = install.returncode == 0 and 'Success' in out
     if not ok:
         print(f"[TVHandler] APK o\'rnatilmadi: {out[:240]}")
     return ok

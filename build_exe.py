@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import glob
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -32,8 +33,8 @@ for name in [
     datas.append((str(ROOT / name), "."))
 if (ROOT / "vidaa").is_dir():
     datas.append((str(ROOT / "vidaa"), "vidaa"))
-if (ROOT / "assets").is_dir():
-    datas.append((str(ROOT / "assets"), "assets"))
+    if (ROOT / "platform-tools" / "adb.exe").is_file():
+        datas.append((str(ROOT / "platform-tools"), "platform-tools"))
 
 existing = sorted(glob.glob(str(ROOT / "dist" / "ControlPS_v*.exe")))
 ver = int(os.environ.get("CONTROLPS_VERSION", "203"))
@@ -103,4 +104,17 @@ for src, dest in datas:
 cmd.append("main.py")
 
 print(" ".join(cmd))
-raise SystemExit(subprocess.call(cmd))
+code = subprocess.call(cmd)
+dist_dir = ROOT / "dist"
+if code == 0:
+    apk = ROOT / "controlps-lock.apk"
+    if apk.is_file():
+        shutil.copy2(apk, dist_dir / "controlps-lock.apk")
+    src_pt = ROOT / "platform-tools"
+    dst_pt = dist_dir / "platform-tools"
+    if (src_pt / "adb.exe").is_file():
+        dst_pt.mkdir(parents=True, exist_ok=True)
+        for item in src_pt.iterdir():
+            if item.is_file():
+                shutil.copy2(item, dst_pt / item.name)
+raise SystemExit(code)
