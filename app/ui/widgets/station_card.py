@@ -409,8 +409,11 @@ class StationCard(QFrame):
                     return
                 import tv_handler
                 import tv_platforms
-                handler = TVHandler(settings.tv_ip, settings.tv_mac, settings.brand, settings.hdmi_input)
                 host = tv_handler.normalize_tv_host(settings.tv_ip)
+                if not ignore_busy and not tv_handler._should_lock_tv(host):
+                    print(f'[TV] Skip block — stol START: {self.station_id} {host}')
+                    return
+                handler = TVHandler(settings.tv_ip, settings.tv_mac, settings.brand, settings.hdmi_input)
                 if tv_platforms.is_webos_brand(settings.brand):
                     if tv_platforms.WEBOS_POWER_OFF_ON_STOP:
                         if ignore_busy:

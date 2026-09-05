@@ -10,8 +10,8 @@ import java.net.URL;
 import java.nio.charset.Charset;
 
 /**
- * PC dagi /controlps/tv-should-lock.
- * 1 = blok; 0 = START (PS). Tarmoq xatosida oxirgi javob saqlanadi (null = bootda blok).
+ * PC: /controlps/tv-should-lock
+ * 1 = blok; 0 = START (PS). Tarmoq xatosida oxirgi javob saqlanadi.
  */
 public final class LockGate {
     private static final File URL_FILE = new File("/sdcard/controlps_lock_gate.url");
@@ -29,21 +29,29 @@ public final class LockGate {
             c.setConnectTimeout(1500);
             c.setReadTimeout(1500);
             c.setUseCaches(false);
+            c.setInstanceFollowRedirects(false);
             int code = c.getResponseCode();
             InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+            if (in == null) {
+                in = c.getInputStream();
+            }
             String body = "";
             if (in != null) {
                 BufferedReader br = new BufferedReader(new InputStreamReader(in, Charset.forName("UTF-8")));
-                body = br.readLine();
+                String line = br.readLine();
                 br.close();
+                body = line == null ? "" : line.trim();
             }
-            if (body != null && body.trim().startsWith("0")) {
+            if (body.startsWith("0")) {
                 return Boolean.FALSE;
             }
-            if (code == 200 || (body != null && body.trim().startsWith("1"))) {
+            if (body.startsWith("1")) {
                 return Boolean.TRUE;
             }
-            return Boolean.TRUE;
+            if (code == 200) {
+                return Boolean.TRUE;
+            }
+            return null;
         } catch (Exception e) {
             return null;
         } finally {

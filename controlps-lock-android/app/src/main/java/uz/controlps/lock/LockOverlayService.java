@@ -92,17 +92,15 @@ public class LockOverlayService extends Service {
                 Boolean need = LockGate.pollShouldLock();
                 if (need != null) {
                     lastGateLock = need;
-                }
-                if (need != null) {
                     if (need) {
                         showOverlay();
                     } else {
                         hideOverlay();
                     }
-                } else if (lastGateLock == null || lastGateLock) {
-                    showOverlay();
-                } else {
+                } else if (Boolean.FALSE.equals(lastGateLock)) {
                     hideOverlay();
+                } else if (lastGateLock == null) {
+                    showOverlay();
                 }
             } catch (Exception ignored) {
             }

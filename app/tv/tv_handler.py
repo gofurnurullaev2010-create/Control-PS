@@ -238,16 +238,29 @@ def _gate_url_for_host(host: str) -> str:
     else:
         return base
 def _should_lock_tv(tv_host: str) -> bool:
-    """True = TV bloklashi kerak (HTTP 200)."""
+    """True = TV bloklashi kerak. Ochiq seans (START) hech qachon bloklanmasin."""
     if not _main_app_lock_gate_active():
         return False
-    else:
-        tv_host = normalize_tv_host(tv_host)
-        with _active_tv_lock:
-            if not tv_host:
-                return True
-            else:
-                return tv_host not in _active_tv_hosts
+    tv_host = normalize_tv_host(tv_host)
+    if not tv_host:
+        return True
+    with _active_tv_lock:
+        if tv_host in _active_tv_hosts:
+            return False
+    try:
+        import database as db
+        for sid in db.list_station_ids():
+            row = db.get_tv_settings(sid)
+            if normalize_tv_host(row.tv_ip or '') != tv_host:
+                continue
+            if db.active_session_for_station(sid):
+                with _active_tv_lock:
+                    _active_tv_hosts.add(tv_host)
+                print(f'[TVHandler] Gate: ochiq seans topildi, bloklanmaydi: {sid} {tv_host}')
+                return False
+    except Exception as e:
+        logger.warning('Gate DB tekshiruv: %s', e)
+    return True
 ALLOW_LEGACY_HTML_LOCK = os.environ.get('CONTROLPS_LEGACY_HTML_LOCK', '').strip().lower() in ['1', 'true', 'yes', 'on']
 def _android_lock_ui_already_foreground(adb_path: str, device: str) -> bool:
     """Lock oynasi yoki overlay blok faol bo\'lsa True."""
@@ -394,10 +407,15 @@ def _ensure_http_server():
                     path = parsed.path
                     if path == _LOCK_GATE_HTTP_PATH:
                         params = parse_qs(parsed.query or '')
-                        tv_host = (params.get('tv') or [''])[0]
+                        tv_host = normalize_tv_host((params.get('tv') or [''])[0])
+                        if not tv_host:
+                            try:
+                                tv_host = normalize_tv_host(self.client_address[0] if self.client_address else '')
+                            except Exception:
+                                tv_host = ''
                         ok = _should_lock_tv(tv_host)
                         body = b'1\n' if ok else b'0\n'
-                        self.send_response(200 if ok else 503)
+                        self.send_response(200)
                         self.send_header('Content-Type', 'text/plain; charset=utf-8')
                         self.send_header('Cache-Control', 'no-store')
                         self.send_header('Access-Control-Allow-Origin', '*')
@@ -1541,42 +1559,38 @@ class TVHandler:
         if not self.tv_ip:
             print('[TVHandler] ERROR: IP not provided for block_screen')
             return
-        else:
-            if self._is_vidaa():
-                host = normalize_tv_host(self.tv_ip)
-                print(f'[TVHandler] VIDAA block_screen -> power off {host}')
-                vidaa_platform.power_off(host, self.tv_mac, brand=self.brand)
+        host = normalize_tv_host(self.tv_ip)
+        if self.brand in ANDROID_ADB_BRANDS and not _should_lock_tv(host):
+            print(f'[TVHandler] block_screen bekor — ochiq seans: {host}')
+            return
+        if self._is_vidaa():
+            print(f'[TVHandler] VIDAA block_screen -> power off {host}')
+            vidaa_platform.power_off(host, self.tv_mac, brand=self.brand)
+            return
+        if self.brand == 'samsung' and self._adb_tcp_port_listening(timeout=0.5):
+            print('[TVHandler] samsung + ADB — Android bloklash')
+            self._artel_show_message('BLOKLANDI', quick=quick)
+            return
+        if tv_platforms.is_smart_tv_brand(self.brand):
+            pc_ip, gate_url = self._smart_tv_gate_context()
+            if tv_platforms.is_webos_brand(self.brand) and tv_platforms.WEBOS_POWER_OFF_ON_STOP:
+                stop_webos_lock_watchdog(host)
+                tv_platforms.webos_power_off(host, pc_ip=pc_ip, gate_url=gate_url, hdmi_input=self.hdmi_input)
                 return
-            else:
-                if self.brand == 'samsung' and self._adb_tcp_port_listening(timeout=0.5):
-                    print('[TVHandler] samsung + ADB — Android bloklash')
-                    self._artel_show_message('BLOKLANDI', quick=quick)
-                    return
-                else:
-                    if tv_platforms.is_smart_tv_brand(self.brand):
-                        pc_ip, gate_url = self._smart_tv_gate_context()
-                        host = normalize_tv_host(self.tv_ip)
-                        if tv_platforms.is_webos_brand(self.brand) and tv_platforms.WEBOS_POWER_OFF_ON_STOP:
-                            stop_webos_lock_watchdog(host)
-                            tv_platforms.webos_power_off(host, pc_ip=pc_ip, gate_url=gate_url, hdmi_input=self.hdmi_input)
-                            return
-                        else:
-                            lock_params = tv_platforms.build_launch_params(pc_ip, host, gate_url, action='lock', hdmi_input=self.hdmi_input)
-                            tv_platforms.smart_tv_block(host, pc_ip=pc_ip, gate_url=gate_url, brand=self.brand, lock_browser_url=self._smart_tv_lock_browser_url(), try_install=not quick)
-                            if tv_platforms.is_webos_brand(self.brand):
-                                start_webos_lock_watchdog(host, lock_params)
-                            return None
-                    else:
-                        if self.brand in ANDROID_ADB_BRANDS:
-                            print('[TVHandler] Blocking Android TV via lock screen')
-                            self._artel_show_message('BLOKLANDI', quick=quick)
-                            return
-                        else:
-                            if self.brand == 'samsung':
-                                print('[TVHandler] Blocking Samsung TV screen via browser')
-                                self._samsung_show_lock_browser()
-                            else:
-                                logger.warning('Noma\'lum brand: %s', self.brand)
+            lock_params = tv_platforms.build_launch_params(pc_ip, host, gate_url, action='lock', hdmi_input=self.hdmi_input)
+            tv_platforms.smart_tv_block(host, pc_ip=pc_ip, gate_url=gate_url, brand=self.brand, lock_browser_url=self._smart_tv_lock_browser_url(), try_install=not quick)
+            if tv_platforms.is_webos_brand(self.brand):
+                start_webos_lock_watchdog(host, lock_params)
+            return
+        if self.brand in ANDROID_ADB_BRANDS:
+            print('[TVHandler] Blocking Android TV via lock screen')
+            self._artel_show_message('BLOKLANDI', quick=quick)
+            return
+        if self.brand == 'samsung':
+            print('[TVHandler] Blocking Samsung TV screen via browser')
+            self._samsung_show_lock_browser()
+            return
+        logger.warning('Noma\'lum brand: %s', self.brand)
     def _samsung_show_lock_browser(self) -> None:
         from samsungtvws import SamsungTVWS
         if not self.tv_ip:
