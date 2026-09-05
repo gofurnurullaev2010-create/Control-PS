@@ -11,6 +11,11 @@ class TVService:
         tv_platforms.prepare_webos_cli()
         tv_platforms.sync_webos_device_mappings_from_ares()
         tv_platforms.warmup_webos_devices()
+        try:
+            import database as db
+            db.clear_tv_settings('STOL-05')
+        except Exception as e:
+            logger.warning('STOL-05 TV olib tashlash: %s', e)
         tv_handler.start_lock_gate_http_server()
         tv_handler.sync_active_tv_sessions_from_db()
         tv_handler.set_main_app_lock_gate(True)

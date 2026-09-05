@@ -1,4 +1,4 @@
-"""PlayStation vaqt summasi — yagona ishonchli formula.\n\nQoida (hech qachon buzilmasin):\n  summa = soatlik_tarif × (soniyalar / 3600)\n\nSoniyalar:\n  VIP     → faqat START→STOP (devor soati / bazadagi start_time)\n  Vaqtli  → max(bron_qilingan, START→STOP)\n\nTarif:\n  seans BOSHLANGANDA qulflangan billing_rate (bazada).\n  Yo\'q bo\'lsa — start_time dagi stol tarifi.\n"""
+"""PlayStation vaqt summasi — yagona ishonchli formula.\n\nQoida (hech qachon buzilmasin):\n  summa = soatlik_tarif × (soniyalar / 3600)\n\nSoniyalar (VIP va vaqtli bir xil):\n  faqat START→STOP (o'ynagan vaqt). 1 soat bron, 15 daqiqada STOP → 15 daqiqa.\n  Taymer limitti faqat avto-STOP uchun; to'lov bron soatiga yopishtirilmaydi.\n\nTarif:\n  seans BOSHLANGANDA qulflangan billing_rate (bazada).\n  Yo\'q bo\'lsa — start_time dagi stol tarifi.\n"""
 from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
@@ -48,12 +48,10 @@ def wall_seconds(start: Optional[datetime], end: Optional[datetime]) -> int:
         except Exception:
             return 0
 def billable_seconds(*, is_vip: bool, start: Optional[datetime], end: Optional[datetime], booked_seconds: int=0) -> int:
-    """Hisob uchun soniyalar — taymerga ISHONILMAYDI."""
-    wall = wall_seconds(start, end)
-    if is_vip:
-        return wall
-    else:
-        return max(int(booked_seconds or 0), wall)
+    """Hisob uchun soniyalar — faqat o'ynagan vaqt (START→STOP)."""
+    _ = is_vip
+    _ = booked_seconds
+    return wall_seconds(start, end)
 def time_amount(hourly_rate: float, seconds: int) -> float:
     """Asosiy formula: tarif × soat."""
     rate = sanitize_hourly_rate(hourly_rate, 0.0)
@@ -82,7 +80,7 @@ def playstation_amount(station_id: str, *, is_vip: bool, start: Optional[datetim
     rate = resolve_billing_rate(station_id, start, locked_rate)
     return time_amount(rate, seconds)
 def live_playstation_amount(station_id: str, *, is_vip: bool, start: Optional[datetime], now: Optional[datetime], booked_seconds: int=0, locked_rate: Optional[float]=None) -> float:
-    """Jonli ekran: 0 dan o\'sadi (START→hozir). Vaqtli bron ham o\'ynagan vaqt."""
+    """Jonli ekran: 0 dan o\'sadi (START→hozir). STOP bilan bir xil: o'ynagan vaqt."""
     seconds = wall_seconds(start, now)
     rate = resolve_billing_rate(station_id, start, locked_rate)
     return time_amount(rate, seconds)

@@ -111,7 +111,6 @@ class StationCard(QFrame):
         self._hdmi_cached = None
         self._block_generation = 0
         self._suppress_block_until = 0.0
-        self._tv_viewing = False
         self._booking = None
         self.setObjectName('StationCard')
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -212,13 +211,6 @@ class StationCard(QFrame):
         self.btn_jostik.setStyleSheet(side_btn_css)
         self.btn_jostik.setMinimumWidth(54 if compact else 62)
         self.btn_jostik.clicked.connect(self._on_joystick_clicked)
-        self.btn_tv_view = QPushButton('TV')
-        self.btn_tv_view.setObjectName('CardTvView')
-        self.btn_tv_view.setFont(QFont('Rajdhani', 8 if compact else 10, QFont.Weight.Bold))
-        self.btn_tv_view.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_tv_view.setToolTip('ZAL-5 TV rejimi: hisob-kitobsiz TV yoqish/o\'chirish')
-        self.btn_tv_view.setMinimumWidth(42 if compact else 48)
-        self.btn_tv_view.clicked.connect(self._on_tv_view_clicked)
         self._hdmi_lbl = QLabel('')
         self._hdmi_lbl.setFont(QFont('Rajdhani', 8 if compact else 10, QFont.Weight.Bold))
         self._hdmi_lbl.setStyleSheet(f'color: {TEXT_SECONDARY};')
@@ -255,8 +247,6 @@ class StationCard(QFrame):
         right_row.addSpacing(12)
         right_row.addWidget(self.btn_ovoz)
         right_row.addSpacing(10)
-        right_row.addWidget(self.btn_tv_view)
-        right_row.addSpacing(8)
         right_row.addWidget(self.btn_jostik)
         right_row.addWidget(self._hdmi_lbl)
         right_row.addSpacing(10)
@@ -289,16 +279,9 @@ class StationCard(QFrame):
     def _refresh_columns(self) -> None:
         """Jadval ustunlari qiymatlarini joriy holatga ko\'ra yangilash."""
         if not self._busy:
-            if self._tv_viewing:
-                self._col_started.setText('TV')
-                self._col_played.setText('ON')
-                self._col_ps.setText('0')
-                self._col_goods.setText('0')
-                self._col_total.setText('0')
-            else:
-                for lbl in [self._col_started, self._col_played, self._col_ps, self._col_goods, self._col_total]:
-                    lbl.setText('—')
-                return None
+            for lbl in [self._col_started, self._col_played, self._col_ps, self._col_goods, self._col_total]:
+                lbl.setText('—')
+            return None
         else:
             started = '—'
             if self._session_start_dt is not None:
@@ -377,7 +360,7 @@ class StationCard(QFrame):
     def _re_block_if_free(self) -> None:
         """Bo\'sh stollar uchun bloklash (tez rejim). Band stolga tegmaydi."""
         import time
-        if self._busy or self._tv_viewing or self._joystick_test_active or self._block_thread_running:
+        if self._busy or self._joystick_test_active or self._block_thread_running:
             return None
         else:
             if time.time() < self._suppress_block_until:
@@ -478,19 +461,16 @@ class StationCard(QFrame):
         if self._booking:
             accent = STATUS_BOOKED
         else:
-            if self._tv_viewing:
-                accent = COL_GREEN
+            if busy and self._vip_open:
+                accent = GOLD_COLOR
             else:
-                if busy and self._vip_open:
-                    accent = GOLD_COLOR
+                if busy:
+                    accent = STATUS_BUSY
                 else:
-                    if busy:
-                        accent = STATUS_BUSY
-                    else:
-                        accent = STATUS_FREE
+                    accent = STATUS_FREE
         self._accent_bar.setStyleSheet(f'background: {accent}; border-radius: 2px;')
         self._title.setStyleSheet(f'color: {accent}; letter-spacing: 1px;')
-        booked = bool(self._booking) and (not self._tv_viewing)
+        booked = bool(self._booking)
         card_bg = '#FEF9C3' if booked else BG_CARD
         card_border = '#FACC15' if booked else BORDER_COLOR
         hover_bg = '#FEF08A' if booked else BG_CARD_HOVER
@@ -532,22 +512,6 @@ class StationCard(QFrame):
             QPushButton#CardStop:enabled:hover {{
                 background-color: rgba(255, 90, 110, 0.30);
             }}
-            QPushButton#CardTvView {{
-                background-color: {COL_GREEN if self._tv_viewing else 'rgba(255, 90, 110, 0.16)'};
-                color: {'#FFFFFF' if self._tv_viewing else COL_RED};
-                border: 1px solid {COL_GREEN if self._tv_viewing else 'rgba(255, 90, 110, 0.55)'};
-                border-radius: 8px;
-                font-weight: 900;
-                padding: 0;
-            }}
-            QPushButton#CardTvView:hover {{
-                background-color: {COL_GREEN if self._tv_viewing else 'rgba(255, 90, 110, 0.30)'};
-            }}
-            QPushButton#CardTvView:disabled {{
-                background-color: {BG_HEADER};
-                color: {TEXT_MUTED};
-                border: 1px solid {BORDER_COLOR};
-            }}
         ''')
     def _set_status(self, text: str, color: str) -> None:
         """Holat o\'zgarganda aksent va ustunlarni yangilash."""
@@ -566,12 +530,6 @@ class StationCard(QFrame):
         self.btn_jostik.setVisible(busy)
         self.btn_jostik.setText(f'JOY ({self._joystick_count})')
         self.btn_jostik.setEnabled(busy)
-        is_tv_station = self.station_id == 'STOL-05'
-        self.btn_tv_view.setObjectName('CardTvView')
-        self.btn_tv_view.setVisible(is_tv_station)
-        self.btn_tv_view.setEnabled(is_tv_station and (not busy))
-        self.btn_tv_view.setText('TV' if self._tv_viewing else 'TV')
-        self.btn_tv_view.setToolTip('TV ON' if self._tv_viewing else 'TV OFF')
         self._stop_btn.setVisible(busy)
         self._stop_btn.setEnabled(True)
         hdmi = int(self._hdmi_cached or 0)
@@ -1083,7 +1041,7 @@ class StationCard(QFrame):
         """Chap bosish → chek (mijoz + operator 8s). Chap 2× → Buyurtma. O'ng 2× → chek."""
         from PyQt6.QtCore import QEvent
         if event is not None and self._busy and (self._session_db_id is not None):
-            skip = {self._start_btn, self._drink_btn, getattr(self, 'btn_transfer', None), getattr(self, 'btn_jostik', None), getattr(self, 'btn_tv_view', None), getattr(self, '_check_btn', None)}
+            skip = {self._start_btn, self._drink_btn, getattr(self, 'btn_transfer', None), getattr(self, 'btn_jostik', None), getattr(self, '_check_btn', None)}
             is_btn = obj in skip or isinstance(obj, QPushButton)
             try:
                 if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton and (not is_btn):
@@ -1253,7 +1211,6 @@ class StationCard(QFrame):
                 self._stop_thread_only()
                 self._joystick_test_active = False
                 self._joystick_count = JOYSTICK_FREE_COUNT
-                self._tv_viewing = False
                 self._vip_open = True
                 self._total_seconds = 0
                 self._elapsed = 0
@@ -1349,7 +1306,6 @@ class StationCard(QFrame):
                 self._stop_thread_only()
                 self._joystick_test_active = False
                 self._joystick_count = JOYSTICK_FREE_COUNT
-                self._tv_viewing = False
                 self._vip_open = False
                 self._vip_sum.setVisible(False)
                 self._total_seconds = seconds
@@ -1417,57 +1373,6 @@ class StationCard(QFrame):
         except Exception:
             pass
         dialog.exec()
-    def _on_tv_view_clicked(self) -> None:
-        """ZAL-5: hisob-kitobsiz TV ko\'rish rejimi."""
-        if self.station_id != 'STOL-05':
-            return
-        else:
-            if self._busy:
-                QMessageBox.information(self, 'Band', 'Bu stolda seans ketayotgan paytda TV rejimini yoqib bo\'lmaydi.')
-                return
-            else:
-                settings = self._port.tv_settings(self.station_id)
-                if not settings.tv_ip:
-                    QMessageBox.warning(self, 'TV sozlanmagan', 'ZAL-5 uchun TV IP/MAC sozlamalarini kiriting.')
-                    return
-                else:
-                    self._tv_viewing = not self._tv_viewing
-                    if self._tv_viewing:
-                        self._arm_unblock_protection()
-                        self._register_tv_session_gate()
-                        status_text = 'TV'
-                    else:
-                        self._unregister_tv_session_gate()
-                        status_text = 'BO\'SH'
-                    self._set_status(status_text, COL_GREEN if self._tv_viewing else STATUS_FREE)
-                    self._sync_action_buttons()
-                    self._run_tv_view_command(settings, turn_on=self._tv_viewing)
-    def _run_tv_view_command(self, settings, *, turn_on: bool) -> None:
-        """TV rejimi uchun fon buyruq: timer/session ochilmaydi."""
-        import threading
-        def _runner() -> None:
-            try:
-                if turn_on:
-                    import tv_handler
-                    import tv_platforms
-                    import vidaa_platform
-                    host = tv_handler.normalize_tv_host(settings.tv_ip)
-                    if vidaa_platform.is_vidaa_brand(settings.brand):
-                        if vidaa_platform.power_on(host, settings.tv_mac, wait_s=50.0, brand=settings.brand):
-                            vidaa_platform.set_source(host, settings.tv_mac, settings.hdmi_input, brand=settings.brand)
-                    else:
-                        if tv_platforms.is_webos_brand(settings.brand):
-                            handler = TVHandler(settings.tv_ip, settings.tv_mac, settings.brand, settings.hdmi_input)
-                            if settings.tv_mac:
-                                handler.wake_if_possible()
-                            tv_platforms.webos_wait_until_online(host, timeout_s=10.0)
-                        else:
-                            TVHandler(settings.tv_ip, settings.tv_mac, settings.brand, settings.hdmi_input).power_on()
-                else:
-                    TVHandler(settings.tv_ip, settings.tv_mac, settings.brand, settings.hdmi_input).power_off()
-            except Exception as e:
-                logging.getLogger('tv').warning('TV viewing command %s %s: %s', 'ON' if turn_on else 'OFF', self.station_id, e)
-        threading.Thread(target=_runner, daemon=True).start()
     def _on_joystick_clicked(self) -> None:
         """JOSTIK qo\'shish: bepul 2 tadan ortiq har bir jostik soatbay hisoblanadi.\n\n        Boshlanishda 2 ta jostik bepul (JOY(2)). Qo\'shimcha jostik qo\'shilganda\n        to\'lov shu vaqtdan STOP gacha: (soatlik jostik narxi × o\'tgan soat).\n        Masalan: 3000/soat, 30 daqiqa → 1500 so\'m (+ stol vaqti alohida).\n        """
         if not self._busy:
@@ -1539,7 +1444,7 @@ class StationCard(QFrame):
                 logging.getLogger('billing').warning('session start_time o\'qilmadi id=%s', session_db_id, exc_info=True)
         return fallback
     def _billable_seconds(self, *, was_vip: bool, timer_elapsed: int, start_dt: Optional[datetime], end_dt: datetime, total_seconds: int) -> int:
-        """Hisob soniyalari — taymer IGNOR (faqat START→STOP / bron)."""
+        """Hisob soniyalari — faqat START→STOP (o'ynagan vaqt)."""
         _ = timer_elapsed
         return _ps_billable_seconds(is_vip=was_vip, start=start_dt, end=end_dt, booked_seconds=int(total_seconds or 0))
     def _finish_session(self, power_off: bool, natural: bool, *, restart_vip: bool=False) -> None:

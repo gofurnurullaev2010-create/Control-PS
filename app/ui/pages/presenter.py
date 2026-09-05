@@ -15,8 +15,8 @@ class PagePresenter:
     def active_rows(self, cards) -> List[list[object]]:
         rows = []
         for card in cards.values():
-            if card._busy or card._tv_viewing:
-                rows.append(['-', card.display_name(), 'Ko\'rilmekte' if card._busy else 'TV', card._col_played.text(), card._col_total.text()])
+            if card._busy:
+                rows.append(['-', card.display_name(), 'Ko\'rilmekte', card._col_played.text(), card._col_total.text()])
         return rows
     def product_rows(self, warehouse: bool=False) -> List[list[object]]:
         rows = []

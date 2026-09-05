@@ -443,8 +443,8 @@ class MainWindow(QMainWindow):
     def _reload_active_page(self) -> None:
         rows = []
         for card in self._cards.values():
-            if card._busy or card._tv_viewing:
-                rows.append(['-', card.display_name(), 'Ko\'rilmekte' if card._busy else 'TV', card._col_played.text(), card._col_total.text()])
+            if card._busy:
+                rows.append(['-', card.display_name(), 'Ko\'rilmekte', card._col_played.text(), card._col_total.text()])
         self._table_set_rows('active', rows)
         self._content_title.setText(f'Jablig\'an ({len(rows)})')
     def _reload_products_page(self, key: str) -> None:

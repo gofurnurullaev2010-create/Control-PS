@@ -394,6 +394,9 @@ def find_station_with_tv_ip(tv_ip: str, *, exclude_station_id: str='') -> Option
                 if normalize_tv_ip_host(row.tv_ip) == host:
                     return sid
         return None
+def clear_tv_settings(station_id: str) -> None:
+    """Stoldan TV bog'lanishini olib tashlash (IP/MAC bo'sh)."""
+    set_tv_settings(station_id, '', '', 'samsung', 1)
 def set_tv_settings(station_id: str, tv_ip: str, tv_mac: str, brand: str, hdmi_input: int=1) -> None:
     conn = _connect()
     conn.execute('\n        INSERT INTO tv_settings (station_id, tv_ip, tv_mac, brand, hdmi_input)\n        VALUES (?, ?, ?, ?, ?)\n        ON CONFLICT(station_id) DO UPDATE SET\n            tv_ip = excluded.tv_ip,\n            tv_mac = excluded.tv_mac,\n            brand = excluded.brand,\n            hdmi_input = excluded.hdmi_input\n        ', (station_id, tv_ip.strip(), tv_mac.strip(), brand.lower(), max(1, min(4, int(hdmi_input)))))

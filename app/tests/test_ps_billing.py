@@ -11,12 +11,12 @@ def test_vip_overnight_never_seven_thousand():
     amt = time_amount(23000, sec)
     assert round_to_thousand(amt) == 153000
     assert round_to_thousand(amt) != 7000
-def test_timed_prepaid_full_booked():
+def test_timed_pays_played_not_booked():
     start = datetime(2026, 8, 2, 10, 0, 0)
-    end = datetime(2026, 8, 2, 10, 21, 0)
-    sec = billable_seconds(is_vip=False, start=start, end=end, booked_seconds=7200)
-    assert sec == 7200
-    assert round_to_thousand(time_amount(20000, sec)) == 40000
+    end = datetime(2026, 8, 2, 10, 15, 0)
+    sec = billable_seconds(is_vip=False, start=start, end=end, booked_seconds=3600)
+    assert sec == 900
+    assert round_to_thousand(time_amount(20000, sec)) == 5000
 def test_sanitize_typo_rate():
     assert sanitize_hourly_rate(150000, 18000) == 15000
 def test_live_overtime_grows_past_booked():
@@ -34,7 +34,7 @@ def test_playstation_amount_locked():
     assert abs(amt - 152566.666) < 1
 if __name__ == '__main__':
     test_vip_overnight_never_seven_thousand()
-    test_timed_prepaid_full_booked()
+    test_timed_pays_played_not_booked()
     test_sanitize_typo_rate()
     test_live_overtime_grows_past_booked()
     test_playstation_amount_locked()
