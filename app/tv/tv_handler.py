@@ -238,29 +238,19 @@ def _gate_url_for_host(host: str) -> str:
     else:
         return base
 def _should_lock_tv(tv_host: str) -> bool:
-    """True = TV bloklashi kerak. Ochiq seans (START) hech qachon bloklanmasin."""
+    """True = TV bloklashi kerak. Faqat START (xotiradagi seans) ochiq qoladi.
+
+    Bazadagi end_time=NULL seans STOP paytida hali yopilmagan bo'ladi —
+    shu yerdan o'qilsa overlay darhol yashiriladi. Loginida
+    sync_active_tv_sessions_from_db() xotirani tiklaydi.
+    """
     if not _main_app_lock_gate_active():
         return False
     tv_host = normalize_tv_host(tv_host)
     if not tv_host:
         return True
     with _active_tv_lock:
-        if tv_host in _active_tv_hosts:
-            return False
-    try:
-        import database as db
-        for sid in db.list_station_ids():
-            row = db.get_tv_settings(sid)
-            if normalize_tv_host(row.tv_ip or '') != tv_host:
-                continue
-            if db.active_session_for_station(sid):
-                with _active_tv_lock:
-                    _active_tv_hosts.add(tv_host)
-                print(f'[TVHandler] Gate: ochiq seans topildi, bloklanmaydi: {sid} {tv_host}')
-                return False
-    except Exception as e:
-        logger.warning('Gate DB tekshiruv: %s', e)
-    return True
+        return tv_host not in _active_tv_hosts
 ALLOW_LEGACY_HTML_LOCK = os.environ.get('CONTROLPS_LEGACY_HTML_LOCK', '').strip().lower() in ['1', 'true', 'yes', 'on']
 def _android_lock_ui_already_foreground(adb_path: str, device: str) -> bool:
     """Lock oynasi yoki overlay blok faol bo\'lsa True."""
@@ -866,6 +856,8 @@ def _overlay_lock_visible(adb_path: str, device: str) -> bool:
             low = line.lower()
             if 'overlay' in low and CONTROLPS_LOCK_PACKAGE in line:
                 return True
+            if CONTROLPS_LOCK_PACKAGE in line:
+                return True
         return False
     except Exception:
         return False
@@ -1082,10 +1074,12 @@ def _show_hdmi_overlay_lock(adb_path: str, device: str, *, fast: bool=False, ski
         if _overlay_lock_visible(adb_path, device):
             print('[TVHandler] RAPTOR overlay shown (joriy ekran saqlanadi)')
             _pin_lock_as_home(adb_path, device)
+            _start_lock_watch_service(adb_path, device)
             return True
         else:
             if not fast and attempt_idx == 1:
                     _ensure_lock_overlay_permission(adb_path, device)
+    _start_lock_watch_service(adb_path, device)
     return False
 def _decode_passthrough_segment(segment: str) -> str:
     """%2F kodlangan TvInput id -> com.foo/.bar/HW5"""
@@ -1568,14 +1562,14 @@ class TVHandler:
                         else:
                             logger.warning('Noma\'lum brand: %s', self.brand)
                             print(f'[TVHandler] Unknown brand: {self.brand}')
-    def block_screen(self, *, quick: bool=False) -> None:
+    def block_screen(self, *, quick: bool=False, force: bool=False) -> None:
         """Ekranni bloklash - STOP: lock.html / ControlPS Lock fon (lock_screen_bg.png), TV o\'chmaydi."""
-        print(f'[TVHandler] block_screen called: brand={self.brand}, ip={self.tv_ip}, quick={quick}')
+        print(f'[TVHandler] block_screen called: brand={self.brand}, ip={self.tv_ip}, quick={quick}, force={force}')
         if not self.tv_ip:
             print('[TVHandler] ERROR: IP not provided for block_screen')
             return
         host = normalize_tv_host(self.tv_ip)
-        if self.brand in ANDROID_ADB_BRANDS and not _should_lock_tv(host):
+        if self.brand in ANDROID_ADB_BRANDS and not force and not _should_lock_tv(host):
             print(f'[TVHandler] block_screen bekor — ochiq seans: {host}')
             return
         if self._is_vidaa():
@@ -1678,10 +1672,10 @@ class TVHandler:
             apk_path = _get_lock_apk_path()
             blocked = False
             if HDMI_PRESERVE_BLOCK:
+                resume_state = _capture_tv_resume_state(adb_path, device)
                 if quick:
                     blocked = _show_hdmi_overlay_lock(adb_path, device, fast=True, skip_asset_push=True)
-                else:
-                    resume_state = _capture_tv_resume_state(adb_path, device)
+                if not blocked:
                     for overlay_round in range(2):
                         if _show_hdmi_overlay_lock(adb_path, device):
                             blocked = True
@@ -1690,18 +1684,18 @@ class TVHandler:
                             _ensure_controlps_lock_installed(adb_path, device)
                             _ensure_lock_overlay_permission(adb_path, device)
                             time.sleep(0.3)
-                    if blocked:
-                        resume_state['block_mode'] = 'overlay'
-                        print('[TVHandler] RAPTOR overlay bloklandi (joriy ilova saqlanadi)')
+                if blocked:
+                    resume_state['block_mode'] = 'overlay'
+                    print('[TVHandler] RAPTOR overlay bloklandi (joriy ilova saqlanadi)')
+                else:
+                    resume_state['block_mode'] = 'failed_overlay'
+                    if self._launch_controlps_lock_app(adb_path, port, message, skip_prepare=True):
+                        _pin_lock_as_home(adb_path, device)
+                        resume_state['block_mode'] = 'activity'
+                        print('[TVHandler] RAPTOR LockActivity bloklandi')
                     else:
-                        resume_state['block_mode'] = 'failed_overlay'
-                        if self._launch_controlps_lock_app(adb_path, port, message, skip_prepare=True):
-                            _pin_lock_as_home(adb_path, device)
-                            resume_state['block_mode'] = 'activity'
-                            print('[TVHandler] RAPTOR LockActivity bloklandi')
-                        elif not quick:
-                            print(f'[TVHandler] WARNING: Overlay blok ochilmadi. TV da:\n  adb install -r "{apk_path}"\n  adb shell appops set uz.controlps.lock SYSTEM_ALERT_WINDOW allow')
-                    _save_tv_resume_state(adb_path, device, resume_state)
+                        print(f'[TVHandler] WARNING: Overlay blok ochilmadi. TV da:\n  adb install -r "{apk_path}"\n  adb shell appops set uz.controlps.lock SYSTEM_ALERT_WINDOW allow')
+                _save_tv_resume_state(adb_path, device, resume_state)
                 return
             try:
                 subprocess.run([adb_path, '-s', device, 'shell', 'input', 'keyevent', '3'], capture_output=True, timeout=3, creationflags=CREATE_NO_WINDOW)

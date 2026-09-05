@@ -417,29 +417,29 @@ class StationCard(QFrame):
                 if tv_platforms.is_webos_brand(settings.brand):
                     if tv_platforms.WEBOS_POWER_OFF_ON_STOP:
                         if ignore_busy:
-                            handler.block_screen(quick=quick)
-                        if gen != self._block_generation or self._busy:
+                            handler.block_screen(quick=quick, force=True)
+                        if gen != self._block_generation:
                             try:
                                 handler.unblock_screen()
                             except Exception:
                                 pass
                         return
-                    if not tv_handler._should_lock_tv(host):
+                    if not ignore_busy and not tv_handler._should_lock_tv(host):
                         return
                     pc_ip, gate_url = handler._smart_tv_gate_context()
                     params = tv_platforms.build_launch_params(pc_ip, host, gate_url, action='lock', hdmi_input=int(settings.hdmi_input or 1))
                     tv_platforms.webos_ensure_lock(host, params)
-                    if gen != self._block_generation or self._busy:
+                    if gen != self._block_generation:
                         try:
                             handler.unblock_screen()
                         except Exception:
                             pass
                     return
                 if tv_platforms.is_smart_tv_brand(settings.brand):
-                    if not tv_handler._should_lock_tv(host):
+                    if not ignore_busy and not tv_handler._should_lock_tv(host):
                         return
-                handler.block_screen(quick=quick)
-                if gen != self._block_generation or self._busy:
+                handler.block_screen(quick=quick, force=ignore_busy)
+                if gen != self._block_generation:
                     try:
                         handler.unblock_screen()
                     except Exception:
@@ -661,7 +661,7 @@ class StationCard(QFrame):
             if settings.tv_ip:
                 import threading
                 handler = TVHandler(settings.tv_ip, settings.tv_mac, settings.brand, settings.hdmi_input)
-                threading.Thread(target=handler.block_screen, daemon=True).start()
+                threading.Thread(target=lambda: handler.block_screen(force=True), daemon=True).start()
             time_rev = self._ps_final_amount(was_vip=bool(self._vip_open), start_dt=self._session_start_dt, end_dt=trusted_now_naive(), booked_seconds=int(self._total_seconds or 0), locked_rate=self._session_billing_rate or None)
             from app.core.money import round_to_thousand
             revenue = round_to_thousand(time_rev + float(joy or 0)) + round_to_thousand(extra + goods_total)

@@ -11,6 +11,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -30,6 +31,7 @@ public class LockOverlayService extends Service {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean shown;
     private Boolean lastGateLock;
+    private long holdLockUntilMs;
 
     public static void ensureRunning(Context ctx, boolean show) {
         Intent i = new Intent(ctx, LockOverlayService.class);
@@ -65,9 +67,11 @@ public class LockOverlayService extends Service {
         String action = intent != null ? intent.getAction() : null;
         if (ACTION_HIDE.equals(action)) {
             lastGateLock = Boolean.FALSE;
+            holdLockUntilMs = 0;
             hideOverlay();
         } else if (ACTION_SHOW.equals(action)) {
             lastGateLock = Boolean.TRUE;
+            holdLockUntilMs = SystemClock.uptimeMillis() + 8000;
             showOverlay();
         }
         return START_STICKY;
@@ -90,14 +94,17 @@ public class LockOverlayService extends Service {
         public void run() {
             try {
                 Boolean need = LockGate.pollShouldLock();
+                long now = SystemClock.uptimeMillis();
                 if (need != null) {
                     lastGateLock = need;
                     if (need) {
                         showOverlay();
+                    } else if (now < holdLockUntilMs) {
+                        showOverlay();
                     } else {
                         hideOverlay();
                     }
-                } else if (Boolean.TRUE.equals(lastGateLock)) {
+                } else if (Boolean.TRUE.equals(lastGateLock) || now < holdLockUntilMs) {
                     showOverlay();
                 } else {
                     hideOverlay();
