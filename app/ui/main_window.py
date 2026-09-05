@@ -824,7 +824,7 @@ class MainWindow(QMainWindow):
                 self._footer_logo.setPixmap(pix.scaled(120 if compact else 160, 28 if compact else 40, Qt.AspectRatioMode.KeepAspectRatio))
     def _start_timers(self) -> None:
         self._persistent_block_timer = QTimer(self)
-        self._persistent_block_timer.setInterval(8000)
+        self._persistent_block_timer.setInterval(20000)
         self._persistent_block_timer.timeout.connect(self._check_all_blocking)
         self._persistent_block_timer.start()
         self._vidaa_timer = QTimer(self)

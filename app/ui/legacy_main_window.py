@@ -54,7 +54,7 @@ class MainWindow(QMainWindow):
         self._build_main_shell()
         self.showMaximized()
         self._persistent_block_timer = QTimer(self)
-        self._persistent_block_timer.setInterval(8000)
+        self._persistent_block_timer.setInterval(20000)
         self._persistent_block_timer.timeout.connect(self._check_all_stations_blocking)
         self._persistent_block_timer.start()
         self._vidaa_fast_block_timer = QTimer(self)

@@ -99,9 +99,8 @@ public class LockOverlayService extends Service {
                     lastGateLock = need;
                     if (need) {
                         showOverlay();
-                    } else if (now < holdLockUntilMs) {
-                        showOverlay();
                     } else {
+                        holdLockUntilMs = 0;
                         hideOverlay();
                     }
                 } else if (Boolean.TRUE.equals(lastGateLock) || now < holdLockUntilMs) {

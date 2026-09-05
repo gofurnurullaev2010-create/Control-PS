@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Any, List, Optional
 import database as db
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QApplication, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget
 from app.ui.dialogs.drink_dialog import _OrderDialogBase
 BG_MAIN = '#FFFFFF'
@@ -34,7 +34,10 @@ class CombinedShopPanel(QDialog):
         self._search.setPlaceholderText('Qidirish...')
         self._search.setMinimumWidth(200)
         self._search.setClearButtonEnabled(True)
-        self._search.textChanged.connect(self._apply_filter)
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.timeout.connect(lambda: self._apply_filter(self._search.text()))
+        self._search.textChanged.connect(lambda _t: self._filter_timer.start(120))
         head.addWidget(self._search)
         root.addLayout(head)
         scroll = QScrollArea()
@@ -97,7 +100,7 @@ class CombinedShopPanel(QDialog):
         for m in db.get_market_products():
             name = str(m.get('name') or '').strip()
             grams = float(m.get('grams') or 0)
-            clean.append({'kind': 'market', 'key': f"market|{int(m.get('id') or 0)}", 'id': int(m.get('id') or 0), 'name': name, 'display': f'{name} {grams:g} g' if grams else 'MARKET', 'sub': grams, 'volume': float(m.get('price') or 0), 'price': int(m.get('quantity') or 0), 'image': m.get('image')})
+            clean.append({'kind': 'market', 'key': f"market|{int(m.get('id') or 0)}", 'id': int(m.get('id') or 0), 'name': name, 'display': f'{name} {grams:g} g' if grams else name or 'MARKET', 'sub': f'{grams:g} g' if grams else '', 'volume': grams, 'price': float(m.get('price') or 0), 'quantity': int(m.get('quantity') or 0), 'image': m.get('image')})
         try:
             order = {k: i for i, k in enumerate(db.get_bar_product_order())}
             clean.sort(key=lambda it: (order.get(str(it['key']), 10000), str(it['display']).lower()))

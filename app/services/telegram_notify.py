@@ -41,7 +41,24 @@ def set_telegram_config(token: str, chat_id: str) -> None:
     ids = _parse_chat_ids(chat_id)
     db._setting_set('telegram_bot_token', (token or '').strip())
     db._setting_set('telegram_chat_id', ', '.join(ids))
-def _api(token: str, method: str, payload: dict[str, Any], timeout: int=60) -> dict[str, Any]:
+def _friendly_telegram_error(exc: Exception) -> str:
+    text = str(exc or '')
+    low = text.lower()
+    if '10051' in text or 'network is unreachable' in low or 'отключенной сети' in low:
+        return (
+            'Internet yo\'q — Telegramga chiqib bo\'lmayapti (WinError 10051).\n'
+            'Bu PC da internet (Wi‑Fi/kabel) yoqing. TV tarmog\'i yetarli emas: '
+            'api.telegram.org ochiq bo\'lishi kerak.\n'
+            'VPN/firewall Telegramni bloklamasin, keyin «Test xabar» ni qayta bosing.'
+        )
+    if '10060' in text or 'timed out' in low or 'timeout' in low:
+        return 'Telegram javob bermadi (timeout). Internet sekin yoki api.telegram.org bloklangan.'
+    if '10061' in text or 'connection refused' in low:
+        return 'Telegram ulanishni rad etdi. Firewall yoki antivirusni tekshiring.'
+    if '11001' in text or 'getaddrinfo' in low or 'nameresolution' in low.replace(' ', ''):
+        return 'DNS Telegram manzilini topa olmadi. Internet/DNS ni tekshiring.'
+    return text
+def _api(token: str, method: str, payload: dict[str, Any], timeout: int=15) -> dict[str, Any]:
     url = f'https://api.telegram.org/bot{token}/{method}'
     data = json.dumps(payload).encode('utf-8')
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
@@ -159,9 +176,14 @@ def test_telegram_connection() -> str:
                             msg += f" | yetmadi: {', '.join(failed)} (botga /start yuboring)"
                         return msg
             except urllib.error.HTTPError as e:
-                return f'HTTP {e.code}: {e.read()[:200]!r}'
+                body = b''
+                try:
+                    body = e.read()[:200]
+                except Exception:
+                    pass
+                return f'HTTP {e.code}: {body!r}'
             except Exception as e:
-                return str(e)
+                return _friendly_telegram_error(e)
 def notify_stock_changes_async(changes: list[dict[str, Any]]) -> str:
     """Ombor qoldig\'i qo\'lda o\'zgarganda Telegram xabar (fon).\n\n    changes: [{\"name\": \"Kola 2 L\", \"old\": 30, \"new\": 28}, ...]\n    Qaytaradi: \"queued\" | \"no_change\" | \"not_configured\"\n    """
     rows = [c for c in changes or [] if int(c.get('old') or 0) != int(c.get('new') or 0)]

@@ -15,15 +15,22 @@ COL_GREEN = '#16A34A'
 COL_RED = '#DC2626'
 BORDER = '#E5E7EB'
 _THUMB = 72
+_PIX_CACHE: dict[tuple, QPixmap] = {}
 def _pixmap_from_bytes(data: Optional[bytes], size: int=_THUMB) -> Optional[QPixmap]:
-    """BLOB baytlaridan QPixmap yasash."""
+    """BLOB baytlaridan QPixmap yasash (kesh — market qotmasin)."""
     if not data:
-        return
-    else:
-        pix = QPixmap()
+        return None
+    raw = bytes(data)
+    key = (size, len(raw), hash(raw[:80] + raw[-80:]))
+    hit = _PIX_CACHE.get(key)
+    if hit is not None and not hit.isNull():
+        return hit
+    pix = QPixmap()
     try:
-        if pix.loadFromData(bytes(data)) and (not pix.isNull()):
-            return pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        if pix.loadFromData(raw) and (not pix.isNull()):
+            scaled = pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            _PIX_CACHE[key] = scaled
+            return scaled
         return None
     except Exception:
         return None

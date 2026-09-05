@@ -557,9 +557,16 @@ class AdminPanelDialog(QDialog):
         self.tg_status.setStyleSheet(f'color: {COL_GREEN}; font-weight: 800;')
     def _test_telegram(self) -> None:
         from app.services.telegram_notify import set_telegram_config, test_telegram_connection
+        import threading
         set_telegram_config(self.tg_token.text(), self.tg_chat.text())
-        result = test_telegram_connection()
-        ok = result.startswith('OK')
+        self.tg_status.setText('Tekshirilmoqda (internet kerak)...')
+        self.tg_status.setStyleSheet(f'color: {TEXT_SECONDARY}; font-weight: 800;')
+        def _run() -> None:
+            result = test_telegram_connection()
+            QTimer.singleShot(0, lambda r=result: self._telegram_test_done(r))
+        threading.Thread(target=_run, daemon=True, name='tg-test').start()
+    def _telegram_test_done(self, result: str) -> None:
+        ok = (result or '').startswith('OK')
         self.tg_status.setText(result)
         self.tg_status.setStyleSheet(f'color: {(COL_GREEN if ok else COL_RED)}; font-weight: 800;')
         if ok:

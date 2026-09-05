@@ -33,6 +33,7 @@ def _lock_for_device(device: str) -> threading.Lock:
         return _adb_device_locks[device]
 ANDROID_ADB_BRANDS = frozenset({'xiaomi', 'ziffler', 'avalon', 'immer', 'premier', 'shivaki', 'sony', 'artel', 'changhong', 'yasin', 'roison', 'rulls', 'tcl'})
 CONTROLPS_LOCK_PACKAGE = 'uz.controlps.lock'
+CONTROLPS_LOCK_VERSION_NAME = '2.1.6'
 CONTROLPS_LOCK_ACTIVITY = f'{CONTROLPS_LOCK_PACKAGE}/.LockActivity'
 CONTROLPS_LOCK_APK_NAME = 'controlps-lock.apk'
 LOCK_OVERLAY_SHOW_ACTION = 'uz.controlps.lock.SHOW_OVERLAY'
@@ -443,6 +444,7 @@ def _ensure_http_server():
             threading.Thread(target=server.serve_forever, daemon=True).start()
             print(f'[TVHandler] HTTP Server started on port 8099 (IP: {_get_local_ip()})')
         except Exception as e:
+            _server_started = False
             print(f'[TVHandler] Failed to start HTTP server: {e}')
 def _adb_tcp_try_connect(adb_path: str, host: str, port: int) -> bool:
     """Bir martalik ADB tarmoq ulanishi (broadcast uchun)."""
@@ -847,7 +849,7 @@ _MEDIATEK_HW_BASE = 4
 def _overlay_lock_visible(adb_path: str, device: str) -> bool:
     """Faqat overlay oyna (LockOverlayService) — LockActivity emas."""
     try:
-        r = _adb_shell(adb_path, device, 'dumpsys', 'window', timeout=6)
+        r = _adb_shell(adb_path, device, 'dumpsys', 'window', timeout=2)
         text = (r.stdout or '') + (r.stderr or '')
         if CONTROLPS_LOCK_PACKAGE not in text:
             return False
@@ -860,8 +862,6 @@ def _overlay_lock_visible(adb_path: str, device: str) -> bool:
                 return True
             low = line.lower()
             if 'overlay' in low and CONTROLPS_LOCK_PACKAGE in line:
-                return True
-            if CONTROLPS_LOCK_PACKAGE in line:
                 return True
         return False
     except Exception:
@@ -884,7 +884,11 @@ def _ensure_controlps_lock_installed(adb_path: str, device: str, *, force: bool=
     if not force:
         check = subprocess.run([adb_path, '-s', device, 'shell', 'pm', 'path', CONTROLPS_LOCK_PACKAGE], capture_output=True, text=True, timeout=5, creationflags=CREATE_NO_WINDOW)
         if check.returncode == 0 and CONTROLPS_LOCK_PACKAGE in (check.stdout or ''):
-            return True
+            info = subprocess.run([adb_path, '-s', device, 'shell', 'dumpsys', 'package', CONTROLPS_LOCK_PACKAGE], capture_output=True, text=True, timeout=6, creationflags=CREATE_NO_WINDOW)
+            dumped = info.stdout or ''
+            if f'versionName={CONTROLPS_LOCK_VERSION_NAME}' in dumped:
+                return True
+            print(f'[TVHandler] Lock APK yangilanadi → {CONTROLPS_LOCK_VERSION_NAME}')
     print(f'[TVHandler] ControlPS Lock o\'rnatilmoqda: {apk_path}')
     install = subprocess.run([adb_path, '-s', device, 'install', '-r', '-g', str(apk_path)], capture_output=True, text=True, timeout=90, creationflags=CREATE_NO_WINDOW)
     out = f'{install.stdout or ""}\n{install.stderr or ""}'
@@ -906,7 +910,7 @@ def _ensure_controlps_lock_installed(adb_path: str, device: str, *, force: bool=
     if not ok:
         print(f"[TVHandler] APK o\'rnatilmadi: {out[:240]}")
     return ok
-def provision_android_lock_tv(host: str, port: int=5555, *, force_install: bool=True) -> bool:
+def provision_android_lock_tv(host: str, port: int=5555, *, force_install: bool=False) -> bool:
     """TV onlayn bo\'lsa: APK o\'rnatish, ruxsat, logo, gate URL, watch service."""
     host = normalize_tv_host(host)
     if not host:
@@ -949,7 +953,7 @@ def provision_all_android_lock_tvs_background() -> None:
                     continue
                 seen.add(key)
                 try:
-                    provision_android_lock_tv(host, port, force_install=True)
+                    provision_android_lock_tv(host, port, force_install=False)
                 except Exception as e:
                     print(f'[TVHandler] Android lock {key}: {e}')
         except Exception as e:

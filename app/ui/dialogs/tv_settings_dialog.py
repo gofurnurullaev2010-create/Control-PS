@@ -147,7 +147,7 @@ class TVSettingsDialog(QDialog):
                         try:
                             from app.tv import tv_handler
                             host, port = tv_handler._parse_tv_host_port(ip_raw)
-                            ok = tv_handler.provision_android_lock_tv(host, port, force_install=True)
+                            ok = tv_handler.provision_android_lock_tv(host, port, force_install=False)
                             print(f'[TVSettings] Android lock install {host}:{port} ok={ok}')
                         except Exception as e:
                             logger.warning('Android lock o\'rnatish %s: %s', sid, e)
