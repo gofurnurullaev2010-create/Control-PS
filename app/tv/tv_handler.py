@@ -50,7 +50,7 @@ _LOCK_GATE_HTTP_PATH = '/controlps/tv-should-lock'
 _LOCK_GATE_URL_REMOTE = '/sdcard/controlps_lock_gate.url'
 _main_app_lock_gate = False
 _gate_lock = threading.Lock()
-_active_tv_hosts: set[str] = set()
+_active_tv_hosts: dict[str, set[str]] = {}
 _active_tv_lock = threading.Lock()
 _webos_watchdog_stop_events: dict[str, threading.Event] = {}
 _webos_watchdog_guard = threading.Lock()
@@ -198,25 +198,30 @@ def sync_webos_initial_lock_from_db() -> None:
                             gate_url = _gate_url_for_host(host)
                             params = tv_platforms.build_launch_params(pc_ip, host, gate_url, action='lock', hdmi_input=int(row.hdmi_input or 1))
                             tv_platforms.webos_launch(host, params)
-def register_tv_session(tv_ip: str) -> None:
-    """START / faol seans: TV gate HTTP bu TV uchun bloklashni to\'xtatadi."""
+def register_tv_session(tv_ip: str, station_id: str='') -> None:
+    """START: shu stolning TVsi bloklanmasin. Bir TV IP ni bir nechta stol bo'lishsa, sanoq saqlanadi."""
     host = normalize_tv_host(tv_ip)
     if not host:
         return
-    else:
-        tv_platforms.cancel_webos_lock_tasks(host)
-        with _active_tv_lock:
-            _active_tv_hosts.add(host)
-        print(f'[TVHandler] TV seans faol (gate ochiq): {host}')
-def unregister_tv_session(tv_ip: str) -> None:
-    """STOP: TV yana gate orqali bloklanishi mumkin."""
+    key = (station_id or '').strip() or host
+    tv_platforms.cancel_webos_lock_tasks(host)
+    with _active_tv_lock:
+        _active_tv_hosts.setdefault(host, set()).add(key)
+    print(f'[TVHandler] TV seans faol (gate ochiq): {host} stol={key}')
+def unregister_tv_session(tv_ip: str, station_id: str='') -> None:
+    """STOP: faqat shu stol olib tashlanadi. Boshqa stol hali START bo'lsa TV ochiq qoladi."""
     host = normalize_tv_host(tv_ip)
     if not host:
         return
-    else:
-        with _active_tv_lock:
-            _active_tv_hosts.discard(host)
-        print(f'[TVHandler] TV seans tugadi (gate yopildi): {host}')
+    key = (station_id or '').strip() or host
+    with _active_tv_lock:
+        holders = _active_tv_hosts.get(host)
+        if not holders:
+            return
+        holders.discard(key)
+        if not holders:
+            _active_tv_hosts.pop(host, None)
+    print(f'[TVHandler] TV seans tugadi (gate): {host} stol={key}')
 def sync_active_tv_sessions_from_db() -> None:
     """Dastur qayta ochilganda bazadagi band stollar TV ro\'yxatini tiklash."""
     import database as db
@@ -229,7 +234,7 @@ def sync_active_tv_sessions_from_db() -> None:
             row = db.get_tv_settings(sid)
             host = normalize_tv_host(row.tv_ip or '')
             if host:
-                register_tv_session(host)
+                register_tv_session(host, station_id=sid)
 def _gate_url_for_host(host: str) -> str:
     base = f'http://{_get_local_ip()}:8099{_LOCK_GATE_HTTP_PATH}'
     host = normalize_tv_host(host)
@@ -250,7 +255,7 @@ def _should_lock_tv(tv_host: str) -> bool:
     if not tv_host:
         return True
     with _active_tv_lock:
-        return tv_host not in _active_tv_hosts
+        return not _active_tv_hosts.get(tv_host)
 ALLOW_LEGACY_HTML_LOCK = os.environ.get('CONTROLPS_LEGACY_HTML_LOCK', '').strip().lower() in ['1', 'true', 'yes', 'on']
 def _android_lock_ui_already_foreground(adb_path: str, device: str) -> bool:
     """Lock oynasi yoki overlay blok faol bo\'lsa True."""
@@ -1569,8 +1574,8 @@ class TVHandler:
             print('[TVHandler] ERROR: IP not provided for block_screen')
             return
         host = normalize_tv_host(self.tv_ip)
-        if self.brand in ANDROID_ADB_BRANDS and not force and not _should_lock_tv(host):
-            print(f'[TVHandler] block_screen bekor — ochiq seans: {host}')
+        if self.brand in ANDROID_ADB_BRANDS and not _should_lock_tv(host):
+            print(f'[TVHandler] block_screen bekor — boshqa stol START yoki ochiq seans: {host}')
             return
         if self._is_vidaa():
             print(f'[TVHandler] VIDAA block_screen -> power off {host}')

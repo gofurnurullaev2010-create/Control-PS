@@ -43,7 +43,7 @@ class TVService:
         settings = self._settings(station_id)
         if settings and settings.tv_ip:
             try:
-                tv_handler.register_tv_session(settings.tv_ip)
+                tv_handler.register_tv_session(settings.tv_ip, station_id=station_id)
             except Exception as e:
                 logger.warning('Gate register %s: %s', station_id, e)
     def unregister_session_gate(self, station_id: str) -> None:
@@ -51,7 +51,7 @@ class TVService:
         settings = self._settings(station_id)
         if settings and settings.tv_ip:
             try:
-                tv_handler.unregister_tv_session(settings.tv_ip)
+                tv_handler.unregister_tv_session(settings.tv_ip, station_id=station_id)
             except Exception as e:
                 logger.warning('Gate unregister %s: %s', station_id, e)
     def sync_active_sessions(self) -> None:

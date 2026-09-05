@@ -346,7 +346,7 @@ class StationCard(QFrame):
         settings = self._port.tv_settings(self.station_id)
         if settings.tv_ip:
             try:
-                tv_handler.register_tv_session(settings.tv_ip)
+                tv_handler.register_tv_session(settings.tv_ip, station_id=self.station_id)
             except Exception as e:
                 logging.getLogger('tv').warning('Gate register %s: %s', self.station_id, e)
     def _unregister_tv_session_gate(self) -> None:
@@ -354,7 +354,7 @@ class StationCard(QFrame):
         settings = self._port.tv_settings(self.station_id)
         if settings.tv_ip:
             try:
-                tv_handler.unregister_tv_session(settings.tv_ip)
+                tv_handler.unregister_tv_session(settings.tv_ip, station_id=self.station_id)
             except Exception as e:
                 logging.getLogger('tv').warning('Gate unregister %s: %s', self.station_id, e)
     def _re_block_if_free(self) -> None:
