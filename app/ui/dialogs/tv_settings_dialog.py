@@ -83,9 +83,9 @@ class TVSettingsDialog(QDialog):
             elif b in ['artel', 'immer', 'tcl', 'xiaomi', 'sony', 'shivaki', 'yasin', 'premier', 'avalon', 'roison', 'rulls', 'ziffler', 'changhong']:
                 self._mac.setPlaceholderText('Ixtiyoriy (faqat START da o\'chiq TV ni yoqish uchun)')
                 self._webos_hint.setText(
-                    'Android TV: IP + tarmoq ADB (odatda :5555). SAQLASH bosilganda ControlPS Lock APK o\'zi o\'rnatiladi. '
-                    'STOP — RAPTOR blok + O\'zbekiston soati; pult ocholmaydi. '
-                    'START — PlayStation HDMI. STOP holatida TV ni o\'chirib qo\'ysangiz dastur uni yoqmaydi; siz yoqib Wi‑Fi ulansa tezda bloklanadi.'
+                    'Android TV: avval android_ulash.bat ni ishga tushiring (ADB + lock APK). '
+                    'Keyin shu yerda stol, brend va HDMI ni SAQLANG. '
+                    'STOP — RAPTOR blok + O\'zbekiston soati; START — PlayStation HDMI.'
                 )
                 self._webos_hint.show()
             else:

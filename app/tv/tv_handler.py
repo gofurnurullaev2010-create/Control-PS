@@ -535,12 +535,23 @@ def _get_adb_path() -> str:
     adb_in_path = shutil.which('adb')
     if adb_in_path:
         return adb_in_path
-    else:
-        common_paths = [Path('C:/platform-tools/adb.exe'), Path('C:/Program Files/platform-tools/adb.exe'), Path('C:/Android/platform-tools/adb.exe')]
-        for p in common_paths:
-            if p.exists():
-                return str(p)
-        return 'adb'
+    extra = []
+    for env_name in ('ANDROID_HOME', 'ANDROID_SDK_ROOT'):
+        root = os.environ.get(env_name) or ''
+        if root:
+            extra.append(Path(root) / 'platform-tools' / 'adb.exe')
+    local = os.environ.get('LOCALAPPDATA') or ''
+    if local:
+        extra.append(Path(local) / 'Android' / 'Sdk' / 'platform-tools' / 'adb.exe')
+    extra.extend([
+        Path('C:/platform-tools/adb.exe'),
+        Path('C:/Program Files/platform-tools/adb.exe'),
+        Path('C:/Android/platform-tools/adb.exe'),
+    ])
+    for p in extra:
+        if p.exists():
+            return str(p)
+    return 'adb'
 def _get_lock_apk_path() -> Path:
     """TV ga yuklanadigan APK: ildizdagi controlps-lock.apk yoki eng yangi app-debug.apk."""
     base = _resource_dir()
