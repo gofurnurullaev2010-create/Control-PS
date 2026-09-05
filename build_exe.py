@@ -16,6 +16,7 @@ datas = [
     (str(ROOT / "ps_bg.jpg"), "."),
     (str(ROOT / "ps_logo.png"), "."),
     (str(ROOT / "lock_screen_bg.png"), "."),
+    (str(ROOT / "raptor_logo.png"), "."),
     (str(ROOT / "transfer_icon.png"), "."),
     (str(ROOT / "controlps-lock.apk"), "."),
     (str(ROOT / "controlps-lock.ipk"), "."),

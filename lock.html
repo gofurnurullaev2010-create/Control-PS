@@ -10,47 +10,60 @@
             padding: 0;
             height: 100%;
             overflow: hidden;
-            font-family: Consolas, "Courier New", monospace;
+            background: #000;
+            font-family: Segoe UI, Arial, sans-serif;
         }
-        body {
-            background-color: #000000;
-            background-image: none;
-        }
-        .overlay {
+        .logo {
             position: absolute;
             inset: 0;
-            background: radial-gradient(ellipse 85% 75% at 50% 48%, rgba(10, 10, 18, 0.12) 0%, rgba(0, 0, 0, 0.45) 100%);
-            pointer-events: none;
+            background: #000 url('lock_screen_bg.png') center center / cover no-repeat;
+        }
+        .clock-wrap {
+            position: absolute;
+            top: 18px;
+            right: 22px;
+            z-index: 2;
+            text-align: right;
         }
         .clock {
-            position: absolute;
-            top: 12px;
-            right: 16px;
-            z-index: 2;
+            font-family: Consolas, "Courier New", monospace;
             font-size: clamp(28px, 5.5vw, 52px);
-            font-weight: 700;
-            color: #00e5ff;
-            text-shadow:
-                0 0 20px rgba(0, 229, 255, 0.75),
-                0 4px 16px rgba(0, 0, 0, 1);
-            font-variant-numeric: tabular-nums;
+            font-weight: 800;
+            color: #FFB020;
+            text-shadow: 0 0 18px rgba(255, 140, 0, 0.65), 0 4px 16px #000;
             letter-spacing: 0.06em;
+            font-variant-numeric: tabular-nums;
+        }
+        .tz {
+            margin-top: 4px;
+            font-size: clamp(12px, 1.8vw, 16px);
+            font-weight: 700;
+            color: rgba(255, 176, 32, 0.85);
+            letter-spacing: 0.12em;
         }
     </style>
 </head>
 <body>
-    <div class="overlay"></div>
-    <div class="clock" id="clock">00:00:00</div>
+    <div class="logo"></div>
+    <div class="clock-wrap">
+        <div class="clock" id="clock">00:00:00</div>
+        <div class="tz">O'ZBEKISTON</div>
+    </div>
     <script>
+        var fmt = new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'Asia/Tashkent',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        });
         function updateClock() {
-            var now = new Date();
-            var h = String(now.getHours()).padStart(2, '0');
-            var m = String(now.getMinutes()).padStart(2, '0');
-            var s = String(now.getSeconds()).padStart(2, '0');
-            document.getElementById('clock').innerText = h + ':' + m + ':' + s;
+            document.getElementById('clock').innerText = fmt.format(new Date());
         }
         setInterval(updateClock, 1000);
         updateClock();
+        document.addEventListener('keydown', function (e) { e.preventDefault(); e.stopPropagation(); });
+        document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     </script>
 </body>
 </html>

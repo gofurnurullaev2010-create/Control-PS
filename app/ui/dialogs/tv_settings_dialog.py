@@ -80,6 +80,14 @@ class TVSettingsDialog(QDialog):
                 self._mac.setPlaceholderText('Majburiy: AA:BB:CC:DD:EE:FF (VIDAA Wake-on-LAN)')
                 self._webos_hint.setText('VIDAA/Toshiba: STOP TV ni o\'chiradi, START Wake-on-LAN bilan yoqadi va HDMI ga o\'tadi. Pairing bir marta + har 30 kunda (yoki TV ulanmasa) «VIDAA PIN pairing». Token ~7 kunda yangilanadi — dastur o\'zi yangilaydi.')
                 self._webos_hint.show()
+            elif b in ['artel', 'immer', 'tcl', 'xiaomi', 'sony', 'shivaki', 'yasin', 'premier', 'avalon', 'roison', 'rulls', 'ziffler', 'changhong']:
+                self._mac.setPlaceholderText('Ixtiyoriy (faqat START da o\'chiq TV ni yoqish uchun)')
+                self._webos_hint.setText(
+                    'Android TV: IP + tarmoq ADB (odatda :5555). SAQLASH bosilganda ControlPS Lock APK o\'zi o\'rnatiladi. '
+                    'STOP — RAPTOR blok + O\'zbekiston soati; pult ocholmaydi. '
+                    'START — PlayStation HDMI. STOP holatida TV ni o\'chirib qo\'ysangiz dastur uni yoqmaydi; siz yoqib Wi‑Fi ulansa tezda bloklanadi.'
+                )
+                self._webos_hint.show()
             else:
                 self._mac.setPlaceholderText('AA:BB:CC:DD:EE:FF (Wake-on-LAN uchun)')
                 self._webos_hint.hide()
@@ -134,6 +142,16 @@ class TVSettingsDialog(QDialog):
                 return
             else:
                 db.set_tv_settings(sid, ip_raw, mac_raw, self._brand.currentText(), hdmi_input)
+                if brand in ['artel', 'immer', 'tcl', 'xiaomi', 'sony', 'shivaki', 'yasin', 'premier', 'avalon', 'roison', 'rulls', 'ziffler', 'changhong'] and ip_raw:
+                    def _install_android_lock() -> None:
+                        try:
+                            from app.tv import tv_handler
+                            host, port = tv_handler._parse_tv_host_port(ip_raw)
+                            ok = tv_handler.provision_android_lock_tv(host, port, force_install=True)
+                            print(f'[TVSettings] Android lock install {host}:{port} ok={ok}')
+                        except Exception as e:
+                            logger.warning('Android lock o\'rnatish %s: %s', sid, e)
+                    threading.Thread(target=_install_android_lock, daemon=True, name=f'android-lock-{sid}').start()
                 if brand in ['lg', 'webos'] and ip_raw:
                         def _push_webos() -> None:
                             try:
@@ -149,7 +167,7 @@ class TVSettingsDialog(QDialog):
                             except Exception as e:
                                 logger.warning('webOS sozlash %s: %s', sid, e)
                         threading.Thread(target=_push_webos, daemon=True, name=f'webos-cfg-{sid}').start()
-                QMessageBox.information(self, 'OK', 'Saqlandi.\n\nVIDAA uchun PIN pairing kerak bo\'lsa — «VIDAA PIN pairing» tugmasini bosing.\nTV 1 haftadan keyin ulanmasa — pairingni qayta qiling.')
+                QMessageBox.information(self, 'OK', 'Saqlandi.\n\nAndroid TV: dastur fonida ControlPS Lock APK o\'rnatiladi (TV yoqilgan va ADB ochiq bo\'lsin).\nVIDAA uchun PIN pairing kerak bo\'lsa — «VIDAA PIN pairing» tugmasini bosing.')
     def _pair_vidaa_optional(self) -> None:
         """Pairing fon oqimida — asosiy oynani qotirmaydi."""
         brand = self._brand.currentText().strip().lower()

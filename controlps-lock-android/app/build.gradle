@@ -1,0 +1,29 @@
+plugins {
+    id 'com.android.application'
+}
+android {
+    namespace 'uz.controlps.lock'
+    compileSdk 34
+    defaultConfig {
+        applicationId "uz.controlps.lock"
+        minSdk 21
+        targetSdk 34
+        versionCode 209
+        versionName "2.0.9"
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+        }
+        debug {
+            minifyEnabled false
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+dependencies {
+}

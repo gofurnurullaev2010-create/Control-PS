@@ -16,7 +16,7 @@ class TVService:
         tv_handler.set_main_app_lock_gate(True)
         tv_handler.sync_webos_initial_lock_from_db()
         tv_handler.start_webos_connectivity_monitor()
-        tv_handler.broadcast_lock_gate_url_to_all_android_tvs_background()
+        tv_handler.provision_all_android_lock_tvs_background()
     def shutdown(self) -> None:
         try:
             from app.tv import tv_handler

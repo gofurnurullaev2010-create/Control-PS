@@ -1,4 +1,9 @@
-# --- Yig'ilgan fayllar (PyInstaller) ---
+# --- Android lock ilova yig'ish chiqishi ---
+controlps-lock-android/.gradle/
+controlps-lock-android/app/build/
+controlps-lock-android/local.properties
+controlps-lock-android/.idea/
+
 dist/
 build/
 *.spec

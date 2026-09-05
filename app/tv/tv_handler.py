@@ -37,12 +37,15 @@ CONTROLPS_LOCK_ACTIVITY = f'{CONTROLPS_LOCK_PACKAGE}/.LockActivity'
 CONTROLPS_LOCK_APK_NAME = 'controlps-lock.apk'
 LOCK_OVERLAY_SHOW_ACTION = 'uz.controlps.lock.SHOW_OVERLAY'
 LOCK_OVERLAY_HIDE_ACTION = 'uz.controlps.lock.HIDE_OVERLAY'
+LOCK_OVERLAY_WATCH_ACTION = 'uz.controlps.lock.WATCH_GATE'
 HDMI_PRESERVE_BLOCK = os.environ.get('CONTROLPS_LEGACY_FULLSCREEN_LOCK', '').strip().lower() not in ['1', 'true', 'yes', 'on']
 _saved_screen_brightness: dict[str, str] = {}
 _RESUME_STATE_REMOTE = '/sdcard/controlps_resume_state.json'
 _resume_state_memory: dict[str, dict] = {}
 _LOCK_SCREEN_BG_REMOTE = '/sdcard/lock_screen_bg.png'
-_LOCK_SCREEN_BG_LOCAL_NAMES = ('lock_screen_bg.png', 'lock_screen_bg.jpg', 'lock_screen_bg.jpeg', 'lock_bg.png', 'lock_bg.jpg')
+_LOCK_SCREEN_BG_LOCAL_NAMES = ('lock_screen_bg.png', 'raptor_logo.png', 'lock_screen_bg.jpg', 'lock_screen_bg.jpeg', 'lock_bg.png', 'lock_bg.jpg')
+_PREV_HOME_REMOTE = '/sdcard/controlps_prev_home.txt'
+_LOCK_HOME_COMPONENT = f'{CONTROLPS_LOCK_PACKAGE}/.LockActivity'
 _LOCK_GATE_HTTP_PATH = '/controlps/tv-should-lock'
 _LOCK_GATE_URL_REMOTE = '/sdcard/controlps_lock_gate.url'
 _main_app_lock_gate = False
@@ -372,7 +375,7 @@ def _ensure_http_server():
     else:
         _server_started = True
         serve_dir = str(_resource_dir())
-        _allowed_static = frozenset({'/lock.html'})
+        _allowed_static = frozenset({'/lock.html', '/lock_screen_bg.png', '/raptor_logo.png'})
         class ControlPSHttpHandler(SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, directory=serve_dir, **kwargs)
@@ -541,7 +544,12 @@ def _get_adb_path() -> str:
 def _get_lock_apk_path() -> Path:
     """TV ga yuklanadigan APK: ildizdagi controlps-lock.apk yoki eng yangi app-debug.apk."""
     base = _resource_dir()
-    candidates = [base / CONTROLPS_LOCK_APK_NAME, base / 'controlps-lock-android' / 'app' / 'build' / 'outputs' / 'apk' / 'debug' / 'app-debug.apk']
+    android_out = base / 'controlps-lock-android' / 'app' / 'build' / 'outputs' / 'apk'
+    candidates = [
+        base / CONTROLPS_LOCK_APK_NAME,
+        android_out / 'release' / 'app-release.apk',
+        android_out / 'debug' / 'app-debug.apk',
+    ]
     existing = [p for p in candidates if p.exists()]
     if not existing:
         return candidates[0]
@@ -572,6 +580,9 @@ def _push_lock_screen_assets_to_tv(adb_path: str, device: str, *, push_html: boo
             print('[TVHandler] WARNING: fon rasmi dastur papkasida bor, lekin TV ga surilmadi (ADB / joy).')
         else:
             print('[TVHandler] INFO: fon rasmi yo\'q — ControlPS Lock qora fon ishlatadi. Rasm uchun dastur yonidagi lock_screen_bg.png yoki .jpg qo\'ying.')
+    raptor = root / 'raptor_logo.png'
+    if raptor.is_file():
+        subprocess.run([adb_path, '-s', device, 'push', str(raptor), '/sdcard/raptor_logo.png'], capture_output=True, timeout=120, creationflags=CREATE_NO_WINDOW)
     _push_lock_gate_url_to_tv(adb_path, device)
     if not push_html:
         return
@@ -798,33 +809,150 @@ def _lock_activity_focused(adb_path: str, device: str) -> bool:
     except Exception:
         pass
     return False
-def _ensure_controlps_lock_installed(adb_path: str, device: str) -> bool:
-    """ControlPS Lock APK o\'rnatilganligini ta\'minlash."""
+def _ensure_controlps_lock_installed(adb_path: str, device: str, *, force: bool=False) -> bool:
+    """ControlPS Lock APK o\'rnatilganligini ta\'minlash. force=True — yangi versiyani yozadi."""
     apk_path = _get_lock_apk_path()
-    check = subprocess.run([adb_path, '-s', device, 'shell', 'pm', 'path', CONTROLPS_LOCK_PACKAGE], capture_output=True, text=True, timeout=5, creationflags=CREATE_NO_WINDOW)
-    if check.returncode == 0 and CONTROLPS_LOCK_PACKAGE in (check.stdout or ''):
-            return True
     if not apk_path.exists():
         print(f'[TVHandler] controlps-lock.apk topilmadi: {apk_path}')
         return False
-    else:
-        print(f'[TVHandler] ControlPS Lock o\'rnatilmoqda: {apk_path}')
+    if not force:
+        check = subprocess.run([adb_path, '-s', device, 'shell', 'pm', 'path', CONTROLPS_LOCK_PACKAGE], capture_output=True, text=True, timeout=5, creationflags=CREATE_NO_WINDOW)
+        if check.returncode == 0 and CONTROLPS_LOCK_PACKAGE in (check.stdout or ''):
+            return True
+    print(f'[TVHandler] ControlPS Lock o\'rnatilmoqda: {apk_path}')
+    install = subprocess.run([adb_path, '-s', device, 'install', '-r', '-g', str(apk_path)], capture_output=True, text=True, timeout=90, creationflags=CREATE_NO_WINDOW)
+    out = f'{install.stdout or ""}\n{install.stderr or ""}'
+    ok = install.returncode == 0 and 'Success' in out
+    if not ok:
         install = subprocess.run([adb_path, '-s', device, 'install', '-r', str(apk_path)], capture_output=True, text=True, timeout=90, creationflags=CREATE_NO_WINDOW)
-        ok = install.returncode == 0 and 'Success' in (install.stdout or '')
-        if not ok:
-            print(f"[TVHandler] APK o\'rnatilmadi: {(install.stderr or install.stdout or '')[:200]}")
-        return ok
+        out = f'{install.stdout or ""}\n{install.stderr or ""}'
+        ok = install.returncode == 0 and 'Success' in out
+    if not ok:
+        print(f"[TVHandler] APK o\'rnatilmadi: {out[:240]}")
+    return ok
+def provision_android_lock_tv(host: str, port: int=5555, *, force_install: bool=True) -> bool:
+    """TV onlayn bo\'lsa: APK o\'rnatish, ruxsat, logo, gate URL, watch service."""
+    host = normalize_tv_host(host)
+    if not host:
+        return False
+    adb_path = _get_adb_path()
+    if not _adb_tcp_try_connect(adb_path, host, int(port or 5555)):
+        print(f'[TVHandler] Android lock: TV o\'chiq yoki ADB yo\'q {host}:{port}')
+        return False
+    device = f'{host}:{int(port or 5555)}'
+    with _lock_for_device(device):
+        if not _ensure_controlps_lock_installed(adb_path, device, force=force_install):
+            return False
+        _ensure_lock_overlay_permission(adb_path, device)
+        _push_lock_screen_assets_to_tv(adb_path, device, push_html=False)
+        _push_lock_gate_url_to_tv(adb_path, device)
+        svc = f'{CONTROLPS_LOCK_PACKAGE}/.LockOverlayService'
+        for cmd in [
+            ['am', 'startforegroundservice', '-n', svc, '-a', LOCK_OVERLAY_WATCH_ACTION],
+            ['am', 'startservice', '-n', svc, '-a', LOCK_OVERLAY_WATCH_ACTION],
+        ]:
+            _adb_shell(adb_path, device, *cmd, timeout=8)
+        print(f'[TVHandler] Android lock tayyor: {device}')
+        return True
+def provision_all_android_lock_tvs_background() -> None:
+    def _run() -> None:
+        try:
+            import database as db
+            adb_path = _get_adb_path()
+            seen = set()
+            for sid in db.list_station_ids():
+                row = db.get_tv_settings(sid)
+                if (row.brand or '').lower() not in ANDROID_ADB_BRANDS:
+                    continue
+                raw = (row.tv_ip or '').strip()
+                if not raw:
+                    continue
+                host, port = _parse_tv_host_port(raw)
+                key = f'{host}:{port}'
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    provision_android_lock_tv(host, port, force_install=True)
+                except Exception as e:
+                    print(f'[TVHandler] Android lock {key}: {e}')
+        except Exception as e:
+            print(f'[TVHandler] Android lock mass install: {e}')
+    threading.Thread(target=_run, daemon=True, name='android-lock-provision').start()
 def _ensure_lock_overlay_permission(adb_path: str, device: str) -> None:
     """Overlay ruxsati (PS ustida blok uchun) — bir marta ADB orqali."""
     _adb_shell(adb_path, device, 'appops', 'set', CONTROLPS_LOCK_PACKAGE, 'SYSTEM_ALERT_WINDOW', 'allow', timeout=5)
     _adb_shell(adb_path, device, 'pm', 'grant', CONTROLPS_LOCK_PACKAGE, 'android.permission.SYSTEM_ALERT_WINDOW', timeout=5)
-def _prepare_tv_for_overlay_block(adb_path: str, device: str) -> None:
-    """Overlay blok: faqat uyg\'otish — HOME yuborilmaydi (YouTube/PS o\'z joyida qoladi)."""
+def _prepare_tv_for_overlay_block(adb_path: str, device: str, *, wake: bool=False) -> None:
+    """Overlay blok: TV o\'chiq bo\'lsa uyg\'otilmaydi (elektr). HOME yuborilmaydi."""
     _adb_shell(adb_path, device, 'settings', 'put', 'secure', 'screensaver_enabled', '0', timeout=4)
-    _adb_shell(adb_path, device, 'input', 'keyevent', '224', timeout=3)
+    if wake:
+        _adb_shell(adb_path, device, 'input', 'keyevent', '224', timeout=3)
     for pkg in ['com.google.android.apps.tv.dreamx', 'com.android.dreams.basic']:
         _adb_shell(adb_path, device, 'am', 'force-stop', pkg, timeout=3)
-    time.sleep(0.2)
+    time.sleep(0.15)
+def _parse_home_component(text: str) -> str:
+    for line in reversed((text or '').splitlines()):
+        line = line.strip()
+        if '/' not in line:
+            continue
+        if line.lower().startswith('priority') or 'does not' in line.lower():
+            continue
+        token = line.split()[-1]
+        if '/' in token and not token.startswith('http'):
+            return token
+    return ''
+def _pin_lock_as_home(adb_path: str, device: str) -> None:
+    """STOP: HOME pultni lock ilovasiga bog\'laydi — launcher ochilmaydi."""
+    try:
+        r = _adb_shell(adb_path, device, 'cmd', 'package', 'resolve-activity', '--brief', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.HOME', timeout=6)
+        current = _parse_home_component((r.stdout or '') + '\n' + (r.stderr or ''))
+        if current and CONTROLPS_LOCK_PACKAGE not in current:
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile('w', encoding='utf-8', newline='\n', delete=False, suffix='.txt') as tf:
+                    tf.write(current + '\n')
+                    tmp_path = tf.name
+                subprocess.run([adb_path, '-s', device, 'push', tmp_path, _PREV_HOME_REMOTE], capture_output=True, timeout=15, creationflags=CREATE_NO_WINDOW)
+            finally:
+                if tmp_path:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+        _adb_shell(adb_path, device, 'cmd', 'package', 'set-home-activity', '--user', '0', _LOCK_HOME_COMPONENT, timeout=6)
+    except Exception as e:
+        print(f'[TVHandler] HOME pin: {e}')
+def _restore_android_home(adb_path: str, device: str) -> None:
+    """START: asl TV launcher qaytariladi."""
+    saved = ''
+    try:
+        r = _adb_shell(adb_path, device, 'sh', '-c', f'cat {_PREV_HOME_REMOTE} 2>/dev/null', timeout=5)
+        saved = (r.stdout or '').strip().splitlines()[0].strip() if (r.stdout or '').strip() else ''
+    except Exception:
+        saved = ''
+    candidates = []
+    if saved and CONTROLPS_LOCK_PACKAGE not in saved:
+        candidates.append(saved)
+    candidates.extend([
+        'com.google.android.tvlauncher/.MainActivity',
+        'com.google.android.apps.tv.launcherx/com.google.android.apps.tv.launcherx.home.HomeActivity',
+        'com.google.android.leanbacklauncher/.MainActivity',
+    ])
+    for comp in candidates:
+        r = _adb_shell(adb_path, device, 'cmd', 'package', 'set-home-activity', '--user', '0', comp, timeout=6)
+        out = ((r.stdout or '') + (r.stderr or '')).lower()
+        if r.returncode == 0 and 'exception' not in out and 'error' not in out[:120]:
+            print(f'[TVHandler] Launcher qaytarildi: {comp}')
+            return
+    print('[TVHandler] WARNING: asl launcher qaytarilmadi')
+def _start_lock_watch_service(adb_path: str, device: str) -> None:
+    svc = f'{CONTROLPS_LOCK_PACKAGE}/.LockOverlayService'
+    for cmd in [
+        ['am', 'startforegroundservice', '-n', svc, '-a', LOCK_OVERLAY_WATCH_ACTION],
+        ['am', 'startservice', '-n', svc, '-a', LOCK_OVERLAY_WATCH_ACTION],
+    ]:
+        _adb_shell(adb_path, device, *cmd, timeout=8)
 def _prepare_tv_for_block(adb_path: str, device: str) -> None:
     """Legacy to\'liq ekran blok: uyg\'otish + bosh ekran (faqat HDMI_PRESERVE_BLOCK o\'chiq bo\'lsa)."""
     _prepare_tv_for_overlay_block(adb_path, device)
@@ -861,7 +989,7 @@ def _show_hdmi_overlay_lock(adb_path: str, device: str, *, fast: bool=False, ski
         if check.returncode != 0 or CONTROLPS_LOCK_PACKAGE not in (check.stdout or ''):
             return False
     _clear_stale_lock_activity(adb_path, device)
-    _prepare_tv_for_overlay_block(adb_path, device)
+    _prepare_tv_for_overlay_block(adb_path, device, wake=False)
     _ensure_lock_overlay_permission(adb_path, device)
     if not skip_asset_push:
         _push_lock_screen_assets_to_tv(adb_path, device, push_html=False)
@@ -873,7 +1001,8 @@ def _show_hdmi_overlay_lock(adb_path: str, device: str, *, fast: bool=False, ski
         _adb_shell(adb_path, device, *cmd, timeout=6 if fast else 10)
         time.sleep(wait_s)
         if _overlay_lock_visible(adb_path, device):
-            print('[TVHandler] TORNADO overlay shown (joriy ekran saqlanadi)')
+            print('[TVHandler] RAPTOR overlay shown (joriy ekran saqlanadi)')
+            _pin_lock_as_home(adb_path, device)
             return True
         else:
             if not fast and attempt_idx == 1:
@@ -1139,13 +1268,15 @@ def _switch_hdmi_via_shell_tune(adb_path: str, device: str, hdmi_input: int) -> 
             print(f'[TVHandler] HDMI {hdmi_input} via {template}')
             return True
     return False
-def _switch_android_hdmi(adb_path: str, device: str, hdmi_input: int, brand: str='') -> bool:
-    """PS (HDMI) ga qaytish — avval blok oynani yopiladi."""
+def _switch_android_hdmi(adb_path: str, device: str, hdmi_input: int, brand: str='', *, dismiss_lock: bool=True) -> bool:
+    """PS (HDMI) ga qaytish."""
     hdmi_input = max(1, min(4, int(hdmi_input or 1)))
     brand = (brand or '').lower()
     print(f"[TVHandler] Switch to HDMI {hdmi_input} (brand={brand or 'android'})")
-    _dismiss_android_lock_ui(adb_path, device)
-    time.sleep(0.15)
+    if dismiss_lock:
+        _restore_android_home(adb_path, device)
+        _hide_hdmi_overlay_lock(adb_path, device)
+        time.sleep(0.12)
     _adb_shell(adb_path, device, 'input', 'keyevent', '224', timeout=3)
     time.sleep(0.1)
     for name, fn in [
@@ -1469,8 +1600,6 @@ class TVHandler:
                 return
             if _overlay_lock_visible(adb_path, device):
                 return
-            if not quick:
-                subprocess.run([adb_path, '-s', device, 'shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'], capture_output=True, timeout=3, creationflags=CREATE_NO_WINDOW)
             apk_path = _get_lock_apk_path()
             blocked = False
             if HDMI_PRESERVE_BLOCK:
@@ -1488,10 +1617,14 @@ class TVHandler:
                             time.sleep(0.3)
                     if blocked:
                         resume_state['block_mode'] = 'overlay'
-                        print('[TVHandler] TORNADO overlay bloklandi (joriy ilova saqlanadi)')
+                        print('[TVHandler] RAPTOR overlay bloklandi (joriy ilova saqlanadi)')
                     else:
                         resume_state['block_mode'] = 'failed_overlay'
-                        if not quick:
+                        if self._launch_controlps_lock_app(adb_path, port, message, skip_prepare=True):
+                            _pin_lock_as_home(adb_path, device)
+                            resume_state['block_mode'] = 'activity'
+                            print('[TVHandler] RAPTOR LockActivity bloklandi')
+                        elif not quick:
                             print(f'[TVHandler] WARNING: Overlay blok ochilmadi. TV da:\n  adb install -r "{apk_path}"\n  adb shell appops set uz.controlps.lock SYSTEM_ALERT_WINDOW allow')
                     _save_tv_resume_state(adb_path, device, resume_state)
                 return
@@ -1833,7 +1966,7 @@ class TVHandler:
                 except Exception as e:
                     print(f'[TVHandler] ERROR disabling screensaver: {e}')
     def _artel_resume_playstation(self) -> None:
-        """START: overlay yopiladi — YouTube/PS o\'z joyidan davom etadi (bosh ekranga emas)."""
+        """START: blok yopiladi, TV uyg\'onadi, sozlangan HDMI (PlayStation) ga o\'tadi."""
         if not self.tv_ip:
             return
         if not self._ensure_adb_connected():
@@ -1842,38 +1975,20 @@ class TVHandler:
         adb_path = _get_adb_path()
         device = f'{self.tv_ip}:{port}'
         with _lock_for_device(device):
-            if HDMI_PRESERVE_BLOCK:
-                saved = _load_tv_resume_state(adb_path, device)
-                block_mode = (saved.get('block_mode') or '').strip().lower()
-                _hide_hdmi_overlay_lock(adb_path, device)
-                if block_mode == 'overlay':
-                    _restore_screen_brightness(adb_path, device)
-                    subprocess.run([adb_path, '-s', device, 'shell', 'input', 'keyevent', '224'], capture_output=True, timeout=3, creationflags=CREATE_NO_WINDOW)
-                    print('[TVHandler] START — overlay yopildi, joriy ilova davom etadi')
-                    return
-                _dismiss_android_lock_ui(adb_path, device)
-                _restore_screen_brightness(adb_path, device)
-                subprocess.run([adb_path, '-s', device, 'shell', 'input', 'keyevent', '224'], capture_output=True, timeout=3, creationflags=CREATE_NO_WINDOW)
-                time.sleep(0.15)
-                restored = False
-                if saved.get('block_mode') != 'failed_overlay':
-                    restored = _restore_tv_resume_state(adb_path, device, saved)
-                if restored:
-                    print('[TVHandler] START — saqlangan ekranga qaytdi')
-                elif self.hdmi_input:
-                    self._switch_to_configured_hdmi(adb_path, device)
-                    print("[TVHandler] START — sozlangan HDMI portiga o'tildi")
-                return
-            try:
-                _dismiss_android_lock_ui(adb_path, device)
-                _restore_screen_brightness(adb_path, device)
-                subprocess.run([adb_path, '-s', device, 'shell', 'input', 'keyevent', '224'], capture_output=True, timeout=3, creationflags=CREATE_NO_WINDOW)
-                for attempt in range(2):
-                    if self._switch_to_configured_hdmi(adb_path, device):
-                        break
-                    time.sleep(0.4)
-            except Exception as e:
-                print(f'[TVHandler] ERROR in resume playstation: {e}')
+            _restore_android_home(adb_path, device)
+            _hide_hdmi_overlay_lock(adb_path, device)
+            _dismiss_android_lock_ui(adb_path, device)
+            _restore_screen_brightness(adb_path, device)
+            subprocess.run([adb_path, '-s', device, 'shell', 'input', 'keyevent', '224'], capture_output=True, timeout=3, creationflags=CREATE_NO_WINDOW)
+            time.sleep(0.2)
+            switched = False
+            if self.hdmi_input:
+                switched = _switch_android_hdmi(adb_path, device, self.hdmi_input, self.brand, dismiss_lock=False)
+            _start_lock_watch_service(adb_path, device)
+            if switched:
+                print('[TVHandler] START — PlayStation HDMI')
+            else:
+                print('[TVHandler] START — overlay yopildi, HDMI aniqlanmadi')
     def _artel_safe_wake_to_hdmi(self) -> None:
         """Eski nom — _artel_resume_playstation ga yo\'naltiriladi."""
         self._artel_resume_playstation()
