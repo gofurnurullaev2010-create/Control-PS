@@ -13,7 +13,7 @@ class TelegramRetryTests(TestCase):
         self.assertGreaterEqual(retry_after_seconds(err), 7.0)
 
     def test_timeout_backoff(self):
-        self.assertGreaterEqual(retry_after_seconds(TimeoutError('timed out')), 2.0)
+        self.assertGreaterEqual(retry_after_seconds(TimeoutError('timed out')), 1.0)
 
     def test_generic_backoff(self):
         self.assertGreaterEqual(retry_after_seconds(RuntimeError('fail')), 1.0)
@@ -42,16 +42,3 @@ class TelegramCashClosePartsTests(TestCase):
                 texts_only=True,
             )
         self.assertTrue(any(c.startswith('DET') for c in calls))
-
-
-class TelegramRetryTests(TestCase):
-    def test_retry_after_header(self):
-        headers = {'Retry-After': '7'}
-        err = urllib.error.HTTPError('https://api.telegram.org', 429, 'Too Many', headers, None)
-        self.assertGreaterEqual(retry_after_seconds(err), 7.0)
-
-    def test_timeout_backoff(self):
-        self.assertGreaterEqual(retry_after_seconds(TimeoutError('timed out')), 2.0)
-
-    def test_generic_backoff(self):
-        self.assertGreaterEqual(retry_after_seconds(RuntimeError('fail')), 1.0)

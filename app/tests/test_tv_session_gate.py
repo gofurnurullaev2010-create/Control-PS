@@ -11,6 +11,8 @@ def setup_module():
 def teardown_module():
     with t._active_tv_lock:
         t._active_tv_hosts.clear()
+    with t._pending_lock_guard:
+        t._pending_lock_hosts.clear()
     t.set_main_app_lock_gate(False)
 
 
@@ -24,8 +26,10 @@ def test_stop_table_two_does_not_lock_table_three_same_ip():
     assert t._should_lock_tv(ip) is False
     t.unregister_tv_session(ip, station_id='STOL-02')
     assert t._should_lock_tv(ip) is False
+    assert t.is_lock_pending(ip) is False
     t.unregister_tv_session(ip, station_id='STOL-03')
     assert t._should_lock_tv(ip) is True
+    assert t.is_lock_pending(ip) is True
 
 
 def test_stop_exclusive_tv_locks():
@@ -52,18 +56,6 @@ def test_pending_lock_after_offline_stop():
     t.register_tv_session(ip, station_id='STOL-01')
     assert t.is_lock_pending(ip) is False
     t.unregister_tv_session(ip, station_id='STOL-01')
-
-
-def test_stop_shared_ip_does_not_pending_other_table():
-    t.set_main_app_lock_gate(True)
-    with t._pending_lock_guard:
-        t._pending_lock_hosts.clear()
-    ip = '192.168.1.60'
-    t.register_tv_session(ip, station_id='STOL-02')
-    t.register_tv_session(ip, station_id='STOL-03')
-    t.unregister_tv_session(ip, station_id='STOL-02')
-    assert t.is_lock_pending(ip) is False
-    t.unregister_tv_session(ip, station_id='STOL-03')
     assert t.is_lock_pending(ip) is True
 
 
@@ -72,6 +64,5 @@ if __name__ == '__main__':
     test_stop_table_two_does_not_lock_table_three_same_ip()
     test_stop_exclusive_tv_locks()
     test_pending_lock_after_offline_stop()
-    test_stop_shared_ip_does_not_pending_other_table()
     teardown_module()
     print('tv_session_gate OK')

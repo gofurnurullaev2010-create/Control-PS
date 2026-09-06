@@ -62,7 +62,7 @@ WEBOS_POWEROFF_COOLDOWN_S = 60.0
 _webos_connectivity_started = False
 WEBOS_CONNECTIVITY_INTERVAL = 8.0
 _android_connectivity_started = False
-ANDROID_CONNECTIVITY_INTERVAL = 3.0
+ANDROID_CONNECTIVITY_INTERVAL = 4.0
 _android_online_state: dict[str, bool] = {}
 _pending_lock_hosts: set[str] = set()
 _pending_lock_guard = threading.Lock()
@@ -200,6 +200,24 @@ def start_android_connectivity_monitor() -> None:
             time.sleep(ANDROID_CONNECTIVITY_INTERVAL)
     threading.Thread(target=_runner, daemon=True, name='ControlPS-Android-connectivity').start()
     print('[TVHandler] Android TV avtomatik blok monitori yoqildi')
+def _android_screen_awake(adb_path: str, device: str) -> bool:
+    """TV ekrani yoniq (standby emas). Noma'lum bo'lsa True."""
+    try:
+        r = subprocess.run(
+            [adb_path, '-s', device, 'shell', 'dumpsys', 'power'],
+            capture_output=True, text=True, timeout=2.2, creationflags=CREATE_NO_WINDOW,
+        )
+        out = (r.stdout or '') + (r.stderr or '')
+        low = out.lower()
+        if 'minteractive=false' in low or 'mwakefulness=asleep' in low or 'mwakefulness=dozing' in low:
+            return False
+        if 'display.STATE_OFF' in out or 'mScreenState=OFF' in out:
+            return False
+        return True
+    except Exception:
+        return True
+
+
 def _poll_android_tv_connectivity() -> None:
     import database as db
     if not _main_app_lock_gate_active():
@@ -216,29 +234,35 @@ def _poll_android_tv_connectivity() -> None:
         if not host or host in seen:
             continue
         seen.add(host)
-        online = _tcp_port_open(host, port)
+        online = _tcp_port_open(host, port, timeout=0.55)
         was = _android_online_state.get(host)
         _android_online_state[host] = online
         if not _should_lock_tv(host):
             clear_lock_pending(host)
             continue
         if not online:
-            _invalidate_adb_cache(f'{host}:{int(port)}')
             mark_lock_pending(host)
+            _invalidate_adb_cache(f'{host}:{int(port)}')
             continue
-        just_back = was is False
+        just_back = was is False or was is None
         pending = is_lock_pending(host)
         if not just_back and not pending:
             continue
-        print(f'[TVHandler] Android TV qayta onlayn — blok buyrug\'i: {host} ({sid})')
+        print(f'[TVHandler] Android TV blok buyrug\'i (yonishi/STOP): {host} ({sid}) pending={pending} back={just_back}')
         try:
-            _invalidate_adb_cache(f'{host}:{int(port)}')
+            adb_path = _get_adb_path()
+            _adb_reconnect_live(adb_path, host, port)
             handler = TVHandler(raw, row.tv_mac, row.brand, int(row.hdmi_input or 1))
             ok = handler.block_screen(quick=False, force=True)
-            if ok:
+            device = f'{host}:{int(port)}'
+            awake = _android_screen_awake(adb_path, device)
+            visible = _overlay_lock_visible(adb_path, device) or _android_lock_ui_already_foreground(adb_path, device)
+            if ok and awake and visible:
                 clear_lock_pending(host)
             else:
                 mark_lock_pending(host)
+                if ok and not awake:
+                    print(f'[TVHandler] Overlay ketdi, lekin TV hali uxlayapti — yonishi kutiladi: {host}')
         except Exception as e:
             mark_lock_pending(host)
             logger.warning('Android qayta-blok %s: %s', host, e)
@@ -262,39 +286,41 @@ def _poll_webos_tv_connectivity() -> None:
                     online = tv_platforms.webos_port_open(host)
                     was_online = _webos_online_state.get(host, False)
                     _webos_online_state[host] = online
-                    if not online:
-                        continue
-                    else:
-                        gate_url = _gate_url_for_host(host)
-                        hdmi = int(row.hdmi_input or 1)
-                        params = tv_platforms.build_launch_params(pc_ip, host, gate_url, hdmi_input=hdmi)
-                        if not was_online:
+                    gate_url = _gate_url_for_host(host)
+                    hdmi = int(row.hdmi_input or 1)
+                    if not _should_lock_tv(host):
+                        clear_lock_pending(host)
+                        if online and not was_online:
                             tv_platforms.clear_ares_device_cache(host)
                             if host in live:
                                 tv_platforms.register_webos_device_mapping(host, live[host])
-                            print(f'[TVHandler] webOS TV qayta onlayn: {host} ({sid})')
                             tv_platforms.webos_push_station_config(host, pc_ip=pc_ip, gate_url=gate_url, hdmi_input=hdmi)
-                        if db.active_session_for_station(sid):
-                            continue
-                        else:
-                            if not _should_lock_tv(host):
-                                clear_lock_pending(host)
-                                continue
-                            else:
-                                pending = is_lock_pending(host)
-                                if tv_platforms.WEBOS_POWER_OFF_ON_STOP:
-                                    now = time.time()
-                                    last = float(_webos_last_poweroff.get(host, 0.0) or 0.0)
-                                    if pending or not was_online or now - last >= WEBOS_POWEROFF_COOLDOWN_S:
-                                        stop_webos_lock_watchdog(host)
-                                        tv_platforms.webos_power_off(host, pc_ip=pc_ip, gate_url=gate_url, hdmi_input=hdmi)
-                                        _webos_last_poweroff[host] = now
-                                        clear_lock_pending(host)
-                                else:
-                                    lock_params = tv_platforms.build_launch_params(pc_ip, host, gate_url, action='lock', hdmi_input=hdmi)
-                                    tv_platforms.webos_ensure_lock(host, lock_params)
-                                    start_webos_lock_watchdog(host, lock_params)
-                                    clear_lock_pending(host)
+                        continue
+                    if not online:
+                        mark_lock_pending(host)
+                        continue
+                    if not was_online:
+                        tv_platforms.clear_ares_device_cache(host)
+                        if host in live:
+                            tv_platforms.register_webos_device_mapping(host, live[host])
+                        print(f'[TVHandler] webOS TV qayta onlayn: {host} ({sid})')
+                        tv_platforms.webos_push_station_config(host, pc_ip=pc_ip, gate_url=gate_url, hdmi_input=hdmi)
+                    if db.active_session_for_station(sid):
+                        continue
+                    pending = is_lock_pending(host)
+                    if tv_platforms.WEBOS_POWER_OFF_ON_STOP:
+                        now = time.time()
+                        last = float(_webos_last_poweroff.get(host, 0.0) or 0.0)
+                        if pending or not was_online or now - last >= WEBOS_POWEROFF_COOLDOWN_S:
+                            stop_webos_lock_watchdog(host)
+                            tv_platforms.webos_power_off(host, pc_ip=pc_ip, gate_url=gate_url, hdmi_input=hdmi)
+                            _webos_last_poweroff[host] = now
+                            clear_lock_pending(host)
+                    else:
+                        lock_params = tv_platforms.build_launch_params(pc_ip, host, gate_url, action='lock', hdmi_input=hdmi)
+                        tv_platforms.webos_ensure_lock(host, lock_params)
+                        start_webos_lock_watchdog(host, lock_params)
+                        clear_lock_pending(host)
 def sync_webos_initial_lock_from_db() -> None:
     """Dastur ochilganda bo\'sh webOS stollar uchun bir marta blok (qayta launch yo\'q)."""
     import database as db
@@ -1811,7 +1837,10 @@ class TVHandler:
                 mark_lock_pending(self.tv_ip)
                 return False
             if _overlay_lock_visible(adb_path, device):
-                clear_lock_pending(self.tv_ip)
+                if _android_screen_awake(adb_path, device):
+                    clear_lock_pending(self.tv_ip)
+                    return True
+                mark_lock_pending(self.tv_ip)
                 return True
             apk_path = _get_lock_apk_path()
             blocked = False
@@ -1845,7 +1874,10 @@ class TVHandler:
                 if resume_state:
                     _save_tv_resume_state(adb_path, device, resume_state)
                 if blocked:
-                    clear_lock_pending(self.tv_ip)
+                    if _android_screen_awake(adb_path, device):
+                        clear_lock_pending(self.tv_ip)
+                    else:
+                        mark_lock_pending(self.tv_ip)
                     return True
                 mark_lock_pending(self.tv_ip)
                 return False

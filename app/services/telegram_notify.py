@@ -15,7 +15,7 @@ from app.services.shift_report import enrich_shift_report, format_shift_details,
 logger = logging.getLogger(__name__)
 
 _SEND_ATTEMPTS = 4
-_BETWEEN_MESSAGES_S = 0.7
+_BETWEEN_MESSAGES_S = 0.25
 
 def _parse_chat_ids(raw: str) -> list[str]:
     """Bitta yoki bir nechta Chat ID — vergul / bo\'shliq / yangi qator."""
@@ -71,33 +71,38 @@ def retry_after_seconds(exc: Exception) -> float:
         if headers is not None:
             ra = str(headers.get('Retry-After') or headers.get('retry-after') or '').strip()
         if ra.isdigit():
-            return min(float(ra) + 0.3, 45.0)
-        body = ''
+            return min(float(ra) + 0.3, 20.0)
+        body_text = ''
         try:
-            raw = getattr(exc, 'fp', None)
-            if raw is not None:
-                body = (exc.read() or b'')[:400].decode('utf-8', errors='replace')
+            raw = exc.read()
+            if raw:
+                body_text = raw.decode('utf-8', 'replace') if isinstance(raw, (bytes, bytearray)) else str(raw)
         except Exception:
-            body = ''
-        m = re.search(r'retry_after["\s:]+(\d+)', body or '')
-        if m:
-            return min(float(m.group(1)) + 0.3, 45.0)
+            body_text = ''
+        if body_text:
+            try:
+                data = json.loads(body_text)
+                pra = (data.get('parameters') or {}).get('retry_after')
+                if pra is not None:
+                    return min(float(pra) + 0.3, 20.0)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
         if int(getattr(exc, 'code', 0) or 0) == 429:
-            return 4.0
+            return 3.0
         if int(getattr(exc, 'code', 0) or 0) in (500, 502, 503, 504):
-            return 2.5
+            return 2.0
     text = str(exc or '').lower()
     if 'retry after' in text:
         m = re.search(r'retry after[^\d]*(\d+)', text)
         if m:
-            return min(float(m.group(1)) + 0.3, 45.0)
+            return min(float(m.group(1)) + 0.3, 20.0)
     if '429' in text or 'too many' in text or 'flood' in text:
-        return 4.0
+        return 3.0
     if '10060' in text or 'timed out' in text or 'timeout' in text:
-        return 2.0
+        return 1.2
     if '10051' in text or '10054' in text or '10053' in text:
-        return 2.5
-    return 1.5
+        return 1.5
+    return 1.0
 def _call_with_retry(label: str, fn: Callable[[], Any], attempts: int=_SEND_ATTEMPTS) -> Any:
     last: Optional[Exception] = None
     for i in range(max(1, attempts)):
@@ -151,7 +156,7 @@ def _send_document(token: str, chat_id: str, path: Path, caption: str='') -> Non
     raw = bytes(body)
     def _post() -> dict[str, Any]:
         req = urllib.request.Request(url, data=raw, headers={'Content-Type': f'multipart/form-data; boundary={boundary}'}, method='POST')
-        with urllib.request.urlopen(req, timeout=40) as resp:
+        with urllib.request.urlopen(req, timeout=90) as resp:
             result = json.loads(resp.read().decode('utf-8'))
             if not result.get('ok'):
                 raise RuntimeError(str(result))
@@ -176,17 +181,8 @@ def _send_document_all(token: str, chat_ids: list[str], path: Path, caption: str
             logger.warning('Telegram sendDocument %s: %s', cid, e)
             failed.append(cid)
     return failed
-def _send_one_part(label: str, fn: Callable[[], None]) -> Optional[Exception]:
-    try:
-        fn()
-        return None
-    except Exception as e:
-        logger.warning('Telegram %s: %s', label, e)
-        return e
-
-
 def send_cash_close_notifications(report: dict[str, Any], pdf_path: Optional[Path]=None, *, texts_only: bool=False) -> None:
-    """3 ta xabar: summary, detal, PDF. Har biri alohida — bittasi yiqilsa qolganlari ketadi."""
+    """3 ta xabar: summary, detal, PDF. Har biri alohida — bittasi yiqilsa qolgani ketadi."""
     token, _ = get_telegram_config()
     chat_ids = get_telegram_chat_ids()
     if not token or not chat_ids:
@@ -198,94 +194,55 @@ def send_cash_close_notifications(report: dict[str, Any], pdf_path: Optional[Pat
     summary = str(snap.get('summary_text') or format_shift_summary(snap))
     details = str(snap.get('details_text') or format_shift_details(snap))
     path = Path(pdf_path) if pdf_path else None
+    if not texts_only and path is None:
+        try:
+            path = generate_product_pdf(snap)
+        except Exception as e:
+            logger.warning('PDF yaratilmadi: %s', e)
+            path = None
     ok_chats: list[str] = []
     last_err: Optional[Exception] = None
-    try:
-        for cid in chat_ids:
-            parts_ok = 0
-            err = _send_one_part(f'summary {cid}', lambda c=cid: _send_message(token, c, summary))
-            if err:
-                last_err = err
-            else:
-                parts_ok += 1
-            time.sleep(_BETWEEN_MESSAGES_S)
-            err = _send_one_part(f'details {cid}', lambda c=cid: _send_message(token, c, details))
-            if err:
-                last_err = err
-            else:
-                parts_ok += 1
-            if not texts_only:
+    for cid in chat_ids:
+        sent_any = False
+        for label, fn in (
+            ('summary', lambda: _send_message(token, cid, summary)),
+            ('details', lambda: _send_message(token, cid, details)),
+        ):
+            try:
+                fn()
+                sent_any = True
                 time.sleep(_BETWEEN_MESSAGES_S)
+            except Exception as e:
+                last_err = e
+                logger.warning('Telegram %s %s: %s', label, cid, e)
+        if not texts_only:
+            try:
                 if path is not None and path.is_file():
-                    err = _send_one_part(f'pdf {cid}', lambda c=cid: _send_document(token, c, path, caption=path.name))
-                    if err:
-                        last_err = err
-                        time.sleep(1.0)
-                        err2 = _send_one_part(f'pdf-retry {cid}', lambda c=cid: _send_document(token, c, path, caption=path.name))
-                        if err2:
-                            last_err = err2
-                            _send_one_part(f'pdf-text {cid}', lambda c=cid: _send_message(token, c, '📄 Tovar_Otchyot PDF yuborilmadi.'))
-                        else:
-                            parts_ok += 1
-                    else:
-                        parts_ok += 1
+                    _send_document(token, cid, path, caption=path.name)
                 else:
-                    err = _send_one_part(f'pdf-missing {cid}', lambda c=cid: _send_message(token, c, '📄 PDF yaratilmadi — faqat matn hisobot yuborildi.'))
-                    if err:
-                        last_err = err
-                    else:
-                        parts_ok += 1
-            if parts_ok:
-                ok_chats.append(cid)
-            logger.info('Telegram kassa %s: %s qism', cid, parts_ok)
-        if not ok_chats:
-            raise last_err or RuntimeError('Telegram: hech qaysi chatga xabar yetmadi')
-        logger.info('Telegram kassa xabarlar yuborildi (%s)', ', '.join(ok_chats))
-    except Exception:
-        logger.exception('Telegram yuborishda xatolik')
-        raise
+                    _send_message(token, cid, '📄 PDF yaratilmadi — faqat matn hisobot yuborildi.')
+                sent_any = True
+            except Exception as e:
+                last_err = e
+                logger.warning('Telegram PDF %s: %s', cid, e)
+        if sent_any:
+            ok_chats.append(cid)
+    if not ok_chats:
+        raise last_err or RuntimeError('Telegram: hech qaysi chatga xabar yetmadi')
+    logger.info('Telegram kassa xabarlar yuborildi (%s)', ', '.join(ok_chats))
 
 
 def notify_cash_close_async(report: dict[str, Any]) -> None:
-    """Matn xabarlarni darhol yuboradi; PDF UI oqimida tayyor bo'lgach qo'shiladi."""
+    """UI ni bloklamasdan: avval 2 matn, keyin PDF."""
     snap = dict(report or {})
-    if not snap.get('summary_text'):
-        try:
-            snap = enrich_shift_report(snap)
-        except Exception as e:
-            logger.warning('Hisobot enrich: %s', e)
-    pdf_box: dict[str, Any] = {'path': None, 'err': None}
-    pdf_ready = threading.Event()
 
     def _run() -> None:
         try:
-            send_cash_close_notifications(snap, texts_only=True)
+            send_cash_close_notifications(snap)
         except Exception as e:
-            logger.warning('Telegram matn: %s', e)
-        if not pdf_ready.wait(60):
-            logger.warning('Telegram PDF 60s ichida tayyor bo\'lmadi')
-        path = pdf_box.get('path')
-        token, _ = get_telegram_config()
-        chat_ids = get_telegram_chat_ids()
-        if not token or not chat_ids:
-            return
-        if isinstance(path, Path) and path.is_file():
-            for cid in chat_ids:
-                err = _send_one_part(f'pdf {cid}', lambda c=cid: _send_document(token, c, path, caption=path.name))
-                if err:
-                    time.sleep(1.2)
-                    _send_one_part(f'pdf-retry {cid}', lambda c=cid: _send_document(token, c, path, caption=path.name))
-                time.sleep(_BETWEEN_MESSAGES_S)
-        elif pdf_box.get('err'):
-            _send_message_all(token, chat_ids, '📄 PDF yaratilmadi — faqat matn hisobot yuborildi.')
+            logger.warning('Telegram: %s', e)
 
     threading.Thread(target=_run, daemon=True, name='tg-cash-close').start()
-    try:
-        pdf_box['path'] = generate_product_pdf(snap)
-    except Exception as e:
-        pdf_box['err'] = e
-        logger.warning('PDF yaratilmadi: %s', e)
-    pdf_ready.set()
 def test_telegram_connection() -> str:
     """Sozlamani tekshirish — \'ok\' yoki xato matni."""
     token, _ = get_telegram_config()

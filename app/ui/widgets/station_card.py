@@ -360,17 +360,19 @@ class StationCard(QFrame):
     def _re_block_if_free(self) -> None:
         """Bo\'sh stollar uchun bloklash (tez rejim). Band stolga tegmaydi."""
         import time
+        import tv_handler
         if self._busy or self._joystick_test_active:
             return None
         settings = self._port.tv_settings(self.station_id)
         if not settings.tv_ip:
             return
+        pending = tv_handler.is_lock_pending(settings.tv_ip)
         if self._block_thread_running:
             self._pending_hard_block = (settings, False)
             return
-        if time.time() < self._suppress_block_until:
+        if not pending and time.time() < self._suppress_block_until:
             return
-        self._run_block_tv_async(settings, quick=True)
+        self._run_block_tv_async(settings, quick=not pending, ignore_busy=pending)
     def _run_block_tv_async(self, settings, *, quick: bool=True, ignore_busy: bool=False) -> None:
         """TV o'chirish/bloklash — parallel chaqiriqlarni oldini olish bilan."""
         import threading
@@ -385,7 +387,7 @@ class StationCard(QFrame):
             try:
                 if gen != self._block_generation:
                     return
-                if time.time() < self._suppress_block_until:
+                if not ignore_busy and time.time() < self._suppress_block_until:
                     return
                 if not ignore_busy and self._busy:
                     return
@@ -1472,7 +1474,9 @@ class StationCard(QFrame):
                 self._block_generation += 1
                 if power_off and settings.tv_ip:
                     print(f'[DEBUG] Calling TV block_screen for {settings.brand} TV at {settings.tv_ip}')
-                    self._run_block_tv_async(settings, quick=True, ignore_busy=True)
+                    import tv_handler as _tvh
+                    _tvh.mark_lock_pending(settings.tv_ip)
+                    self._run_block_tv_async(settings, quick=False, ignore_busy=True)
                 else:
                     if power_off:
                         print(f'[DEBUG] No TV IP configured for {self.station_id}')
