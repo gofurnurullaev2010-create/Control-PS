@@ -62,7 +62,7 @@ WEBOS_POWEROFF_COOLDOWN_S = 60.0
 _webos_connectivity_started = False
 WEBOS_CONNECTIVITY_INTERVAL = 8.0
 _android_connectivity_started = False
-ANDROID_CONNECTIVITY_INTERVAL = 5.0
+ANDROID_CONNECTIVITY_INTERVAL = 3.0
 _android_online_state: dict[str, bool] = {}
 _pending_lock_hosts: set[str] = set()
 _pending_lock_guard = threading.Lock()
@@ -223,6 +223,8 @@ def _poll_android_tv_connectivity() -> None:
             clear_lock_pending(host)
             continue
         if not online:
+            _invalidate_adb_cache(f'{host}:{int(port)}')
+            mark_lock_pending(host)
             continue
         just_back = was is False
         pending = is_lock_pending(host)
@@ -230,6 +232,7 @@ def _poll_android_tv_connectivity() -> None:
             continue
         print(f'[TVHandler] Android TV qayta onlayn — blok buyrug\'i: {host} ({sid})')
         try:
+            _invalidate_adb_cache(f'{host}:{int(port)}')
             handler = TVHandler(raw, row.tv_mac, row.brand, int(row.hdmi_input or 1))
             ok = handler.block_screen(quick=False, force=True)
             if ok:
@@ -334,14 +337,19 @@ def unregister_tv_session(tv_ip: str, station_id: str='') -> None:
     if not host:
         return
     key = (station_id or '').strip() or host
+    last_holder = False
     with _active_tv_lock:
         holders = _active_tv_hosts.get(host)
         if not holders:
-            return
-        holders.discard(key)
-        if not holders:
-            _active_tv_hosts.pop(host, None)
+            last_holder = True
+        else:
+            holders.discard(key)
+            if not holders:
+                _active_tv_hosts.pop(host, None)
+                last_holder = True
     print(f'[TVHandler] TV seans tugadi (gate): {host} stol={key}')
+    if last_holder:
+        mark_lock_pending(host)
 def sync_active_tv_sessions_from_db() -> None:
     """Dastur qayta ochilganda bazadagi band stollar TV ro\'yxatini tiklash."""
     import database as db
