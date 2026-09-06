@@ -890,23 +890,29 @@ def _ensure_controlps_lock_installed(adb_path: str, device: str, *, force: bool=
                 return True
             print(f'[TVHandler] Lock APK yangilanadi → {CONTROLPS_LOCK_VERSION_NAME}')
     print(f'[TVHandler] ControlPS Lock o\'rnatilmoqda: {apk_path}')
-    install = subprocess.run([adb_path, '-s', device, 'install', '-r', '-g', str(apk_path)], capture_output=True, text=True, timeout=90, creationflags=CREATE_NO_WINDOW)
-    out = f'{install.stdout or ""}\n{install.stderr or ""}'
-    ok = install.returncode == 0 and 'Success' in out
-    if not ok:
-        install = subprocess.run([adb_path, '-s', device, 'install', '-r', str(apk_path)], capture_output=True, text=True, timeout=90, creationflags=CREATE_NO_WINDOW)
+    attempts = [
+        [adb_path, '-s', device, 'install', '-r', '-g', '--user', '0', str(apk_path)],
+        [adb_path, '-s', device, 'install', '-r', '--user', '0', str(apk_path)],
+        [adb_path, '-s', device, 'install', '-r', '-g', str(apk_path)],
+        [adb_path, '-s', device, 'install', '-r', str(apk_path)],
+    ]
+    out = ''
+    ok = False
+    for cmd in attempts:
+        install = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=CREATE_NO_WINDOW)
         out = f'{install.stdout or ""}\n{install.stderr or ""}'
         ok = install.returncode == 0 and 'Success' in out
+        if ok:
+            break
     if (not ok) and ('INSTALL_FAILED_UPDATE_INCOMPATIBLE' in out or 'signatures do not match' in out.lower()):
         print('[TVHandler] Eski lock imzo mos emas — o\'chirib qayta o\'rnatiladi')
         subprocess.run([adb_path, '-s', device, 'uninstall', CONTROLPS_LOCK_PACKAGE], capture_output=True, text=True, timeout=30, creationflags=CREATE_NO_WINDOW)
-        install = subprocess.run([adb_path, '-s', device, 'install', '-r', '-g', str(apk_path)], capture_output=True, text=True, timeout=90, creationflags=CREATE_NO_WINDOW)
-        out = f'{install.stdout or ""}\n{install.stderr or ""}'
-        ok = install.returncode == 0 and 'Success' in out
-        if not ok:
-            install = subprocess.run([adb_path, '-s', device, 'install', '-r', str(apk_path)], capture_output=True, text=True, timeout=90, creationflags=CREATE_NO_WINDOW)
+        for cmd in attempts:
+            install = subprocess.run(cmd, capture_output=True, text=True, timeout=90, creationflags=CREATE_NO_WINDOW)
             out = f'{install.stdout or ""}\n{install.stderr or ""}'
             ok = install.returncode == 0 and 'Success' in out
+            if ok:
+                break
     if not ok:
         print(f"[TVHandler] APK o\'rnatilmadi: {out[:240]}")
     return ok

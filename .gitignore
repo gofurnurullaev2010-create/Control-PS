@@ -6,6 +6,7 @@ controlps-lock-android/.idea/
 
 dist/
 build/
+ControlPS_PORTABLE/
 *.spec
 
 # --- Dekompilyatsiya / tahlil ish papkasi ---
