@@ -4,14 +4,19 @@ import json
 import logging
 import re
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 import database as db
 from app.services.shift_report import enrich_shift_report, format_shift_details, format_shift_summary, generate_product_pdf
 logger = logging.getLogger(__name__)
+
+_SEND_ATTEMPTS = 5
+_BETWEEN_MESSAGES_S = 0.45
+
 def _parse_chat_ids(raw: str) -> list[str]:
     """Bitta yoki bir nechta Chat ID — vergul / bo\'shliq / yangi qator."""
     text = (raw or '').strip()
@@ -58,17 +63,62 @@ def _friendly_telegram_error(exc: Exception) -> str:
     if '11001' in text or 'getaddrinfo' in low or 'nameresolution' in low.replace(' ', ''):
         return 'DNS Telegram manzilini topa olmadi. Internet/DNS ni tekshiring.'
     return text
-def _api(token: str, method: str, payload: dict[str, Any], timeout: int=15) -> dict[str, Any]:
+def retry_after_seconds(exc: Exception) -> float:
+    """429 / tarmoq xatosidan keyin kutish (soniya)."""
+    if isinstance(exc, urllib.error.HTTPError):
+        headers = getattr(exc, 'headers', None)
+        ra = ''
+        if headers is not None:
+            ra = str(headers.get('Retry-After') or headers.get('retry-after') or '').strip()
+        if ra.isdigit():
+            return min(float(ra) + 0.3, 45.0)
+        if int(getattr(exc, 'code', 0) or 0) == 429:
+            return 4.0
+        if int(getattr(exc, 'code', 0) or 0) in (500, 502, 503, 504):
+            return 2.5
+    text = str(exc or '').lower()
+    if 'retry after' in text:
+        m = re.search(r'retry after[^\d]*(\d+)', text)
+        if m:
+            return min(float(m.group(1)) + 0.3, 45.0)
+    if '429' in text or 'too many' in text or 'flood' in text:
+        return 4.0
+    if '10060' in text or 'timed out' in text or 'timeout' in text:
+        return 2.0
+    if '10051' in text or '10054' in text or '10053' in text:
+        return 2.5
+    return 1.5
+def _call_with_retry(label: str, fn: Callable[[], Any], attempts: int=_SEND_ATTEMPTS) -> Any:
+    last: Optional[Exception] = None
+    for i in range(max(1, attempts)):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            wait = retry_after_seconds(e)
+            logger.warning('Telegram %s urinish %s/%s: %s (%.1fs)', label, i + 1, attempts, e, wait)
+            if i + 1 < attempts:
+                time.sleep(wait)
+    raise last if last else RuntimeError(label)
+def _api(token: str, method: str, payload: dict[str, Any], timeout: int=25) -> dict[str, Any]:
     url = f'https://api.telegram.org/bot{token}/{method}'
     data = json.dumps(payload).encode('utf-8')
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'}, method='POST')
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode('utf-8'))
+        result = json.loads(resp.read().decode('utf-8'))
+        if not result.get('ok'):
+            raise RuntimeError(str(result))
+        return result
 def _send_message(token: str, chat_id: str, text: str) -> None:
     chunk = text
     while chunk:
         part, chunk = (chunk[:4000], chunk[4000:])
-        _api(token, 'sendMessage', {'chat_id': chat_id, 'text': part})
+        payload = {
+            'chat_id': chat_id,
+            'text': part,
+            'disable_web_page_preview': True,
+        }
+        _call_with_retry('sendMessage', lambda p=payload: _api(token, 'sendMessage', p))
 def _send_document(token: str, chat_id: str, path: Path, caption: str='') -> None:
     boundary = '----ControlPSBoundary7MA4YWxkTrZu0gW'
     file_bytes = path.read_bytes()
@@ -88,11 +138,15 @@ def _send_document(token: str, chat_id: str, path: Path, caption: str='') -> Non
     body.extend(file_bytes)
     body.extend(f'\r\n--{boundary}--\r\n'.encode())
     url = f'https://api.telegram.org/bot{token}/sendDocument'
-    req = urllib.request.Request(url, data=bytes(body), headers={'Content-Type': f'multipart/form-data; boundary={boundary}'}, method='POST')
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        result = json.loads(resp.read().decode('utf-8'))
-        if not result.get('ok'):
-            raise RuntimeError(str(result))
+    raw = bytes(body)
+    def _post() -> dict[str, Any]:
+        req = urllib.request.Request(url, data=raw, headers={'Content-Type': f'multipart/form-data; boundary={boundary}'}, method='POST')
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            result = json.loads(resp.read().decode('utf-8'))
+            if not result.get('ok'):
+                raise RuntimeError(str(result))
+            return result
+    _call_with_retry('sendDocument', _post)
 def _send_message_all(token: str, chat_ids: list[str], text: str) -> list[str]:
     """Barcha chatlarga yuborish; muvaffaqiyatsiz ID larni qaytaradi."""
     failed = []
@@ -119,21 +173,35 @@ def send_cash_close_notifications(report: dict[str, Any], pdf_path: Optional[Pat
     if not token or not chat_ids:
         logger.info('Telegram sozlanmagan — xabar yuborilmadi.')
         return
-    else:
-        snap = enrich_shift_report(report) if not report.get('summary_text') else dict(report)
-        if not snap.get('summary_text'):
-            snap = enrich_shift_report(snap)
-        summary = str(snap.get('summary_text') or format_shift_summary(snap))
-        details = str(snap.get('details_text') or format_shift_details(snap))
-        path = Path(pdf_path) if pdf_path else generate_product_pdf(snap)
-        try:
-            _send_message_all(token, chat_ids, summary)
-            _send_message_all(token, chat_ids, details)
-            _send_document_all(token, chat_ids, path, caption=path.name)
-            logger.info('Telegram kassa xabarlari yuborildi (%s)', ', '.join(chat_ids))
-        except Exception:
-            logger.exception('Telegram yuborishda xatolik')
-            raise
+    snap = enrich_shift_report(report) if not report.get('summary_text') else dict(report)
+    if not snap.get('summary_text'):
+        snap = enrich_shift_report(snap)
+    summary = str(snap.get('summary_text') or format_shift_summary(snap))
+    details = str(snap.get('details_text') or format_shift_details(snap))
+    path = Path(pdf_path) if pdf_path else generate_product_pdf(snap)
+    ok_chats: list[str] = []
+    last_err: Optional[Exception] = None
+    try:
+        for cid in chat_ids:
+            try:
+                _send_message(token, cid, summary)
+                time.sleep(_BETWEEN_MESSAGES_S)
+                _send_message(token, cid, details)
+                time.sleep(_BETWEEN_MESSAGES_S)
+                if path.is_file():
+                    _send_document(token, cid, path, caption=path.name)
+                else:
+                    _send_message(token, cid, '📄 PDF yaratilmadi — faqat matn hisobot yuborildi.')
+                ok_chats.append(cid)
+            except Exception as e:
+                last_err = e
+                logger.warning('Telegram 3 ta xabar %s: %s', cid, e)
+        if not ok_chats:
+            raise last_err or RuntimeError('Telegram: hech qaysi chatga 3 ta xabar yetmadi')
+        logger.info('Telegram kassa 3 ta xabar yuborildi (%s)', ', '.join(ok_chats))
+    except Exception:
+        logger.exception('Telegram yuborishda xatolik')
+        raise
 def notify_cash_close_async(report: dict[str, Any]) -> None:
     """UI ni bloklamasdan yuborish. PDF asosiy oqimda yaratiladi (Qt)."""
     snap = dict(report or {})

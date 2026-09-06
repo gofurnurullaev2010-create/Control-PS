@@ -360,24 +360,23 @@ class StationCard(QFrame):
     def _re_block_if_free(self) -> None:
         """Bo\'sh stollar uchun bloklash (tez rejim). Band stolga tegmaydi."""
         import time
-        if self._busy or self._joystick_test_active or self._block_thread_running:
+        if self._busy or self._joystick_test_active:
             return None
-        else:
-            if time.time() < self._suppress_block_until:
-                return
-            else:
-                settings = self._port.tv_settings(self.station_id)
-                if not settings.tv_ip:
-                    return
-                else:
-                    self._run_block_tv_async(settings, quick=True)
+        settings = self._port.tv_settings(self.station_id)
+        if not settings.tv_ip:
+            return
+        if self._block_thread_running:
+            self._pending_hard_block = (settings, False)
+            return
+        if time.time() < self._suppress_block_until:
+            return
+        self._run_block_tv_async(settings, quick=True)
     def _run_block_tv_async(self, settings, *, quick: bool=True, ignore_busy: bool=False) -> None:
         """TV o'chirish/bloklash — parallel chaqiriqlarni oldini olish bilan."""
         import threading
         import time
         if self._block_thread_running:
-            if ignore_busy:
-                self._pending_hard_block = (settings, quick)
+            self._pending_hard_block = (settings, False if ignore_busy else quick)
             return
         gen = self._block_generation
         self._block_thread_running = True

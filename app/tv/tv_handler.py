@@ -60,7 +60,12 @@ _webos_online_state: dict[str, bool] = {}
 _webos_last_poweroff: dict[str, float] = {}
 WEBOS_POWEROFF_COOLDOWN_S = 60.0
 _webos_connectivity_started = False
-WEBOS_CONNECTIVITY_INTERVAL = 20.0
+WEBOS_CONNECTIVITY_INTERVAL = 8.0
+_android_connectivity_started = False
+ANDROID_CONNECTIVITY_INTERVAL = 5.0
+_android_online_state: dict[str, bool] = {}
+_pending_lock_hosts: set[str] = set()
+_pending_lock_guard = threading.Lock()
 def normalize_tv_host(raw: str) -> str:
     """TV IP yoki host:port dan faqat host qaytaradi."""
     raw = (raw or '').strip()
@@ -125,6 +130,115 @@ def start_webos_connectivity_monitor() -> None:
                 time.sleep(WEBOS_CONNECTIVITY_INTERVAL)
         threading.Thread(target=_runner, daemon=True, name='ControlPS-webOS-connectivity').start()
         print('[TVHandler] webOS avtomatik ulanish monitori yoqildi')
+def mark_lock_pending(tv_ip: str) -> None:
+    """STOP paytida TV o\'chiq bo\'lsa: yonishi bilan blok buyrug\'i yuboriladi."""
+    host = normalize_tv_host(tv_ip)
+    if not host:
+        return
+    with _pending_lock_guard:
+        _pending_lock_hosts.add(host)
+    print(f'[TVHandler] TV blok kutilmoqda (qayta yonishi): {host}')
+def clear_lock_pending(tv_ip: str) -> None:
+    host = normalize_tv_host(tv_ip)
+    if not host:
+        return
+    with _pending_lock_guard:
+        _pending_lock_hosts.discard(host)
+def is_lock_pending(tv_ip: str) -> bool:
+    host = normalize_tv_host(tv_ip)
+    if not host:
+        return False
+    with _pending_lock_guard:
+        return host in _pending_lock_hosts
+def _tcp_port_open(host: str, port: int, timeout: float=0.45) -> bool:
+    if not host:
+        return False
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+def _adb_shell_alive(adb_path: str, device: str, timeout: float=2.0) -> bool:
+    """'already connected' keshini ishonmasdan, TV haqiqatan javob beradimi."""
+    try:
+        r = subprocess.run([adb_path, '-s', device, 'shell', 'echo', 'cps'], capture_output=True, text=True, timeout=timeout, creationflags=CREATE_NO_WINDOW)
+        return r.returncode == 0 and 'cps' in ((r.stdout or '') + (r.stderr or ''))
+    except Exception:
+        return False
+def _invalidate_adb_cache(cache_key: str) -> None:
+    _adb_connect_cache.pop(cache_key, None)
+def _adb_reconnect_live(adb_path: str, host: str, port: int) -> bool:
+    device = f'{host}:{int(port)}'
+    try:
+        subprocess.run([adb_path, 'disconnect', device], capture_output=True, text=True, timeout=3, creationflags=CREATE_NO_WINDOW)
+    except Exception:
+        pass
+    _invalidate_adb_cache(device)
+    try:
+        res = subprocess.run([adb_path, 'connect', device], capture_output=True, text=True, timeout=4, creationflags=CREATE_NO_WINDOW)
+        out = (res.stdout or '').lower()
+        if 'connected' not in out and 'already connected' not in out:
+            return False
+    except Exception:
+        return False
+    if _adb_shell_alive(adb_path, device):
+        _adb_connect_cache[device] = time.time() + 12
+        return True
+    return False
+def start_android_connectivity_monitor() -> None:
+    """TV o\'chirib-yoqilganda (START davomida ham STOP dan keyin) avtomatik bloklash."""
+    global _android_connectivity_started
+    if _android_connectivity_started:
+        return
+    _android_connectivity_started = True
+    def _runner() -> None:
+        while True:
+            try:
+                _poll_android_tv_connectivity()
+            except Exception as e:
+                logger.warning('Android connectivity: %s', e)
+            time.sleep(ANDROID_CONNECTIVITY_INTERVAL)
+    threading.Thread(target=_runner, daemon=True, name='ControlPS-Android-connectivity').start()
+    print('[TVHandler] Android TV avtomatik blok monitori yoqildi')
+def _poll_android_tv_connectivity() -> None:
+    import database as db
+    if not _main_app_lock_gate_active():
+        return
+    seen: set[str] = set()
+    for sid in db.list_station_ids():
+        row = db.get_tv_settings(sid)
+        if (row.brand or '').lower() not in ANDROID_ADB_BRANDS:
+            continue
+        raw = (row.tv_ip or '').strip()
+        if not raw:
+            continue
+        host, port = _parse_tv_host_port(raw)
+        if not host or host in seen:
+            continue
+        seen.add(host)
+        online = _tcp_port_open(host, port)
+        was = _android_online_state.get(host)
+        _android_online_state[host] = online
+        if not _should_lock_tv(host):
+            clear_lock_pending(host)
+            continue
+        if not online:
+            continue
+        just_back = was is False
+        pending = is_lock_pending(host)
+        if not just_back and not pending:
+            continue
+        print(f'[TVHandler] Android TV qayta onlayn — blok buyrug\'i: {host} ({sid})')
+        try:
+            handler = TVHandler(raw, row.tv_mac, row.brand, int(row.hdmi_input or 1))
+            ok = handler.block_screen(quick=False, force=True)
+            if ok:
+                clear_lock_pending(host)
+            else:
+                mark_lock_pending(host)
+        except Exception as e:
+            mark_lock_pending(host)
+            logger.warning('Android qayta-blok %s: %s', host, e)
 def _poll_webos_tv_connectivity() -> None:
     """Har bir LG TV: tarmoq qaytsa config yuborish va bo\'sh stolni bloklash."""
     import database as db
@@ -161,19 +275,23 @@ def _poll_webos_tv_connectivity() -> None:
                             continue
                         else:
                             if not _should_lock_tv(host):
+                                clear_lock_pending(host)
                                 continue
                             else:
+                                pending = is_lock_pending(host)
                                 if tv_platforms.WEBOS_POWER_OFF_ON_STOP:
                                     now = time.time()
                                     last = float(_webos_last_poweroff.get(host, 0.0) or 0.0)
-                                    if not was_online or now - last >= WEBOS_POWEROFF_COOLDOWN_S:
+                                    if pending or not was_online or now - last >= WEBOS_POWEROFF_COOLDOWN_S:
                                         stop_webos_lock_watchdog(host)
                                         tv_platforms.webos_power_off(host, pc_ip=pc_ip, gate_url=gate_url, hdmi_input=hdmi)
                                         _webos_last_poweroff[host] = now
+                                        clear_lock_pending(host)
                                 else:
                                     lock_params = tv_platforms.build_launch_params(pc_ip, host, gate_url, action='lock', hdmi_input=hdmi)
                                     tv_platforms.webos_ensure_lock(host, lock_params)
                                     start_webos_lock_watchdog(host, lock_params)
+                                    clear_lock_pending(host)
 def sync_webos_initial_lock_from_db() -> None:
     """Dastur ochilganda bo\'sh webOS stollar uchun bir marta blok (qayta launch yo\'q)."""
     import database as db
@@ -206,6 +324,7 @@ def register_tv_session(tv_ip: str, station_id: str='') -> None:
         return
     key = (station_id or '').strip() or host
     tv_platforms.cancel_webos_lock_tasks(host)
+    clear_lock_pending(host)
     with _active_tv_lock:
         _active_tv_hosts.setdefault(host, set()).add(key)
     print(f'[TVHandler] TV seans faol (gate ochiq): {host} stol={key}')
@@ -450,16 +569,9 @@ def _adb_tcp_try_connect(adb_path: str, host: str, port: int) -> bool:
     """Bir martalik ADB tarmoq ulanishi (broadcast uchun)."""
     if not host:
         return False
-    else:
-        device = f'{host}:{port}'
-        for _ in range(3):
-            res = subprocess.run([adb_path, 'connect', device], capture_output=True, text=True, timeout=5, creationflags=CREATE_NO_WINDOW)
-            out = (res.stdout or '').lower()
-            if 'connected' in out or 'already connected' in out:
-                return True
-            else:
-                time.sleep(1)
+    if not _tcp_port_open(host, int(port)):
         return False
+    return _adb_reconnect_live(adb_path, host, int(port))
 def _push_lock_gate_url_to_tv(adb_path: str, device: str) -> None:
     """TV ga PC manzili (HTTP gate) — bootda faqat dastur ochiq bo\'lsa bloklash."""
     tmp_path = None
@@ -1411,25 +1523,23 @@ class TVHandler:
                     return (host.strip(), port)
         return (raw, 5555)
     def _ensure_adb_connected(self) -> bool:
-        """ADB ulanishini ta\'minlash (retry bilan, 25s kesh)."""
+        """ADB ulanishini ta\'minlash. TV o\'chiq/qayta yoqilganda eski kesh ishlatilmaydi."""
         if not self.tv_ip:
             return False
-        else:
-            port = self.adb_port
-            cache_key = f'{self.tv_ip}:{port}'
-            if time.time() < _adb_connect_cache.get(cache_key, 0):
+        port = self.adb_port
+        cache_key = f'{self.tv_ip}:{port}'
+        if not self._adb_tcp_port_listening(timeout=0.45):
+            _invalidate_adb_cache(cache_key)
+            return False
+        adb_path = _get_adb_path()
+        if time.time() < _adb_connect_cache.get(cache_key, 0) and _adb_shell_alive(adb_path, cache_key, timeout=1.5):
+            return True
+        for _attempt in range(3):
+            if _adb_reconnect_live(adb_path, self.tv_ip, port):
                 return True
-            else:
-                adb_path = _get_adb_path()
-                for attempt in range(2):
-                    res = subprocess.run([adb_path, 'connect', f'{self.tv_ip}:{port}'], capture_output=True, text=True, timeout=4, creationflags=CREATE_NO_WINDOW)
-                    out = (res.stdout or '').lower()
-                    if 'connected' in out or 'already connected' in out:
-                        _adb_connect_cache[cache_key] = time.time() + 25
-                        return True
-                    else:
-                        time.sleep(0.4)
-                return False
+            time.sleep(0.45)
+        _invalidate_adb_cache(cache_key)
+        return False
     def _adb_tcp_port_listening(self, timeout: float=0.5) -> bool:
         """Tarmoqda ADB porti ochiq-yuqligini tez tekshirish (baza default \'samsung\' + Android IP holati)."""
         if not self.tv_ip:
@@ -1577,44 +1687,53 @@ class TVHandler:
                         else:
                             logger.warning('Noma\'lum brand: %s', self.brand)
                             print(f'[TVHandler] Unknown brand: {self.brand}')
-    def block_screen(self, *, quick: bool=False, force: bool=False) -> None:
+    def block_screen(self, *, quick: bool=False, force: bool=False) -> bool:
         """Ekranni bloklash - STOP: lock.html / ControlPS Lock fon (lock_screen_bg.png), TV o\'chmaydi."""
         print(f'[TVHandler] block_screen called: brand={self.brand}, ip={self.tv_ip}, quick={quick}, force={force}')
         if not self.tv_ip:
             print('[TVHandler] ERROR: IP not provided for block_screen')
-            return
+            return False
         host = normalize_tv_host(self.tv_ip)
-        if self.brand in ANDROID_ADB_BRANDS and not _should_lock_tv(host):
+        if self.brand in ANDROID_ADB_BRANDS and not _should_lock_tv(host) and not force:
             print(f'[TVHandler] block_screen bekor — boshqa stol START yoki ochiq seans: {host}')
-            return
+            return False
         if self._is_vidaa():
             print(f'[TVHandler] VIDAA block_screen -> power off {host}')
             vidaa_platform.power_off(host, self.tv_mac, brand=self.brand)
-            return
+            return True
         if self.brand == 'samsung' and self._adb_tcp_port_listening(timeout=0.5):
             print('[TVHandler] samsung + ADB — Android bloklash')
-            self._artel_show_message('BLOKLANDI', quick=quick)
-            return
+            return bool(self._artel_show_message('BLOKLANDI', quick=quick))
         if tv_platforms.is_smart_tv_brand(self.brand):
             pc_ip, gate_url = self._smart_tv_gate_context()
             if tv_platforms.is_webos_brand(self.brand) and tv_platforms.WEBOS_POWER_OFF_ON_STOP:
                 stop_webos_lock_watchdog(host)
+                if not tv_platforms.webos_port_open(host, timeout=0.4):
+                    mark_lock_pending(host)
+                    print(f'[TVHandler] webOS o\'chiq — blok/poweroff kutilmoqda: {host}')
+                    return False
                 tv_platforms.webos_power_off(host, pc_ip=pc_ip, gate_url=gate_url, hdmi_input=self.hdmi_input)
-                return
+                clear_lock_pending(host)
+                return True
+            if tv_platforms.is_webos_brand(self.brand) and not tv_platforms.webos_port_open(host, timeout=0.4):
+                mark_lock_pending(host)
+                print(f'[TVHandler] webOS o\'chiq — lock kutilmoqda: {host}')
+                return False
             lock_params = tv_platforms.build_launch_params(pc_ip, host, gate_url, action='lock', hdmi_input=self.hdmi_input)
             tv_platforms.smart_tv_block(host, pc_ip=pc_ip, gate_url=gate_url, brand=self.brand, lock_browser_url=self._smart_tv_lock_browser_url(), try_install=not quick)
             if tv_platforms.is_webos_brand(self.brand):
                 start_webos_lock_watchdog(host, lock_params)
-            return
+            clear_lock_pending(host)
+            return True
         if self.brand in ANDROID_ADB_BRANDS:
             print('[TVHandler] Blocking Android TV via lock screen')
-            self._artel_show_message('BLOKLANDI', quick=quick)
-            return
+            return bool(self._artel_show_message('BLOKLANDI', quick=quick))
         if self.brand == 'samsung':
             print('[TVHandler] Blocking Samsung TV screen via browser')
             self._samsung_show_lock_browser()
-            return
+            return True
         logger.warning('Noma\'lum brand: %s', self.brand)
+        return False
     def _samsung_show_lock_browser(self) -> None:
         from samsungtvws import SamsungTVWS
         if not self.tv_ip:
@@ -1670,24 +1789,28 @@ class TVHandler:
                                 self._samsung_send_key(self._samsung_hdmi_key())
                             else:
                                 logger.warning('Noma\'lum brand: %s', self.brand)
-    def _artel_show_message(self, message: str, *, quick: bool=False) -> None:
+    def _artel_show_message(self, message: str, *, quick: bool=False) -> bool:
         """ADB orqali TV bloklash. Default: HDMI (PS) ustida overlay — bosh ekranga o\'tmaydi."""
         print(f'[TVHandler] _artel_show_message: {message} {self.tv_ip} quick={quick}')
         if not self.tv_ip:
-            return
+            return False
         port = self.adb_port
         adb_path = _get_adb_path()
         device = f'{self.tv_ip}:{port}'
         with _lock_for_device(device):
-            if not self._ensure_adb_connected():
-                print(f"[TVHandler] WARNING: TV ga ulanib bo'lmadi: {self.tv_ip}:{port}")
-                return
+            if not self._adb_tcp_port_listening(timeout=0.5) or not self._ensure_adb_connected():
+                print(f"[TVHandler] WARNING: TV ga ulanib bo'lmadi: {self.tv_ip}:{port} — yonishi bilan blok yuboriladi")
+                mark_lock_pending(self.tv_ip)
+                return False
             if _overlay_lock_visible(adb_path, device):
-                return
+                clear_lock_pending(self.tv_ip)
+                return True
             apk_path = _get_lock_apk_path()
             blocked = False
             if HDMI_PRESERVE_BLOCK:
-                resume_state = _capture_tv_resume_state(adb_path, device)
+                resume_state = {}
+                if _adb_shell_alive(adb_path, device, timeout=1.5):
+                    resume_state = _capture_tv_resume_state(adb_path, device)
                 if quick:
                     blocked = _show_hdmi_overlay_lock(adb_path, device, fast=True, skip_asset_push=True)
                 if not blocked:
@@ -1707,22 +1830,31 @@ class TVHandler:
                     if self._launch_controlps_lock_app(adb_path, port, message, skip_prepare=True):
                         _pin_lock_as_home(adb_path, device)
                         resume_state['block_mode'] = 'activity'
+                        blocked = True
                         print('[TVHandler] RAPTOR LockActivity bloklandi')
                     else:
                         print(f'[TVHandler] WARNING: Overlay blok ochilmadi. TV da:\n  adb install -r "{apk_path}"\n  adb shell appops set uz.controlps.lock SYSTEM_ALERT_WINDOW allow')
-                _save_tv_resume_state(adb_path, device, resume_state)
-                return
+                if resume_state:
+                    _save_tv_resume_state(adb_path, device, resume_state)
+                if blocked:
+                    clear_lock_pending(self.tv_ip)
+                    return True
+                mark_lock_pending(self.tv_ip)
+                return False
             try:
                 subprocess.run([adb_path, '-s', device, 'shell', 'input', 'keyevent', '3'], capture_output=True, timeout=3, creationflags=CREATE_NO_WINDOW)
                 time.sleep(0.5)
                 for attempt in range(3):
                     if self._launch_controlps_lock_app(adb_path, port, message):
-                        return
+                        clear_lock_pending(self.tv_ip)
+                        return True
                     if attempt < 2 and apk_path.exists():
                         subprocess.run([adb_path, '-s', device, 'install', '-r', str(apk_path)], capture_output=True, text=True, timeout=45, creationflags=CREATE_NO_WINDOW)
                         time.sleep(1.0)
             except Exception as e:
                 print(f'[TVHandler] ERROR in _artel_show_message: {e}')
+            mark_lock_pending(self.tv_ip)
+            return False
     def _launch_controlps_lock_app(self, adb_path: str, port: int, message: str, *, skip_prepare: bool=False) -> bool:
         """Maxsus Android TV lock APK ni ochish. O\'rnatilmagan bo\'lsa False qaytaradi."""
         apk_path = _get_lock_apk_path()

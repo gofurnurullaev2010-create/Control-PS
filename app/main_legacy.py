@@ -87,6 +87,7 @@ def main() -> None:
         tv_handler.set_main_app_lock_gate(True)
         tv_handler.sync_webos_initial_lock_from_db()
         tv_handler.start_webos_connectivity_monitor()
+        tv_handler.start_android_connectivity_monitor()
         tv_handler.broadcast_lock_gate_url_to_all_android_tvs_background()
         app.aboutToQuit.connect(lambda: tv_handler.set_main_app_lock_gate(False))
         sys.exit(app.exec())
