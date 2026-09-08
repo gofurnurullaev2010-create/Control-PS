@@ -1571,7 +1571,7 @@ class TVHandler:
         for _attempt in range(3):
             if _adb_reconnect_live(adb_path, self.tv_ip, port):
                 return True
-            time.sleep(0.45)
+            time.sleep(0.2)
         _invalidate_adb_cache(cache_key)
         return False
     def _adb_tcp_port_listening(self, timeout: float=0.5) -> bool:
@@ -1641,7 +1641,7 @@ class TVHandler:
             if self._is_vidaa():
                 host = normalize_tv_host(self.tv_ip)
                 print(f'[TVHandler] VIDAA START: WOL + HDMI{self.hdmi_input} {host}')
-                if vidaa_platform.power_on(host, self.tv_mac, wait_s=50.0, brand=self.brand):
+                if vidaa_platform.power_on(host, self.tv_mac, wait_s=12.0, brand=self.brand):
                     vidaa_platform.set_source(host, self.tv_mac, self.hdmi_input, brand=self.brand)
                 return None
             else:
@@ -1656,17 +1656,12 @@ class TVHandler:
                             stop_webos_lock_watchdog(host)
                             if self.tv_mac:
                                 print(f'[TVHandler] webOS START WOL: {self.tv_mac} ({host})')
-                                self.wake_if_possible()
-                            if not tv_platforms.webos_port_open(host, timeout=0.35):
-                                print(f'[TVHandler] webOS START: TV online kutilmoqda {host}')
-                                tv_platforms.webos_wait_until_online(host, timeout_s=10.0)
+                                threading.Thread(target=self.wake_if_possible, daemon=True).start()
                         else:
                             if self.tv_mac:
                                 print(f'[TVHandler] Smart TV WOL: {self.tv_mac}')
-                                self.wake_if_possible()
+                                threading.Thread(target=self.wake_if_possible, daemon=True).start()
                         pc_ip, gate_url = self._smart_tv_gate_context()
-                        if tv_platforms.is_webos_brand(self.brand):
-                            tv_platforms.webos_push_station_config(host, pc_ip=pc_ip, gate_url=gate_url, hdmi_input=self.hdmi_input, action='idle')
                         tv_platforms.smart_tv_unblock(host, pc_ip=pc_ip, gate_url=gate_url, brand=self.brand, hdmi_input=self.hdmi_input)
                     else:
                         if self.brand == 'samsung':
@@ -1791,7 +1786,7 @@ class TVHandler:
             if self._is_vidaa():
                 host = normalize_tv_host(self.tv_ip)
                 print(f'[TVHandler] VIDAA unblock: WOL + HDMI{self.hdmi_input} {host}')
-                if vidaa_platform.power_on(host, self.tv_mac, wait_s=50.0, brand=self.brand):
+                if vidaa_platform.power_on(host, self.tv_mac, wait_s=12.0, brand=self.brand):
                     vidaa_platform.set_source(host, self.tv_mac, self.hdmi_input, brand=self.brand)
                 return None
             else:
@@ -1806,13 +1801,8 @@ class TVHandler:
                             stop_webos_lock_watchdog(host)
                             if self.tv_mac:
                                 print(f'[TVHandler] webOS unblock WOL: {self.tv_mac} ({host})')
-                                self.wake_if_possible()
-                            if not tv_platforms.webos_port_open(host, timeout=0.35):
-                                print(f'[TVHandler] webOS unblock: TV online kutilmoqda {host}')
-                                tv_platforms.webos_wait_until_online(host, timeout_s=10.0)
+                                threading.Thread(target=self.wake_if_possible, daemon=True).start()
                         pc_ip, gate_url = self._smart_tv_gate_context()
-                        if tv_platforms.is_webos_brand(self.brand):
-                            tv_platforms.webos_push_station_config(host, pc_ip=pc_ip, gate_url=gate_url, hdmi_input=self.hdmi_input, action='idle')
                         tv_platforms.smart_tv_unblock(host, pc_ip=pc_ip, gate_url=gate_url, brand=self.brand, hdmi_input=self.hdmi_input)
                     else:
                         if self.brand in ANDROID_ADB_BRANDS:

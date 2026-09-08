@@ -528,13 +528,13 @@ def power_on(host: str, mac: str, *, wait_s: float = 45.0, brand: str = "") -> b
         logger.warning("VIDAA START: TV online bo'lmadi: %s", host)
         return False
     last_err = ""
-    for attempt in range(1, 6):
+    for attempt in range(1, 4):
         try:
             tv = _client(host, mac, brand)
         except ImportError:
             return False
         try:
-            if not _connect_ready(tv, timeout=15.0):
+            if not _connect_ready(tv, timeout=8.0):
                 last_err = "MQTT ulanmadi"
                 logger.warning("VIDAA START urinish %s: %s (%s)", attempt, last_err, host)
             elif _wake_screen(tv):
@@ -553,7 +553,7 @@ def power_on(host: str, mac: str, *, wait_s: float = 45.0, brand: str = "") -> b
                 pass
         if mac:
             wake(mac, host)
-        time.sleep(1.4)
+        time.sleep(0.6)
     logger.warning("VIDAA START: ekran yonmadi %s (%s)", host, last_err or "noma'lum")
     return False
 

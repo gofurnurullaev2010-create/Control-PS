@@ -688,7 +688,7 @@ def active_session_for_station(station_id: str) -> Optional[dict[str, Any]]:
     """Stol uchun tugallanmagan oxirgi seansni qaytaradi."""
     conn = _connect()
     try:
-        row = conn.execute('\n            SELECT id, station_id, start_time, total_seconds, is_vip,\n                   COALESCE(billing_rate, 0) AS billing_rate\n            FROM sessions\n            WHERE station_id = ? AND end_time IS NULL\n            ORDER BY start_time DESC\n            LIMIT 1\n            ', (station_id,)).fetchone()
+        row = conn.execute('\n            SELECT id, station_id, start_time, total_seconds, is_vip,\n                   COALESCE(billing_rate, 0) AS billing_rate,\n                   COALESCE(note, \'\') AS note\n            FROM sessions\n            WHERE station_id = ? AND end_time IS NULL\n            ORDER BY start_time DESC\n            LIMIT 1\n            ', (station_id,)).fetchone()
     except sqlite3.OperationalError:
         row = conn.execute('\n            SELECT id, station_id, start_time, total_seconds, is_vip\n            FROM sessions\n            WHERE station_id = ? AND end_time IS NULL\n            ORDER BY start_time DESC\n            LIMIT 1\n            ', (station_id,)).fetchone()
     conn.close()

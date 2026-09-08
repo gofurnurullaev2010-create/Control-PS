@@ -13,7 +13,7 @@ from app.tv.tv_handler import TVHandler
 from app.services.station_card_port import make_station_card_port
 from app.core.network_time import trusted_now_naive
 from app.core.ps_billing import billable_seconds as _ps_billable_seconds, parse_session_dt, playstation_amount, wall_seconds as _ps_wall_seconds
-from app.ui.dialogs.station_dialogs import BuyurtmaDialog, TransferTimeDialog, VIPStartDialog, VolumeDialog
+from app.ui.dialogs.station_dialogs import AmountStartDialog, BuyurtmaDialog, TransferTimeDialog, VIPStartDialog, VolumeDialog
 from app.ui.widgets.grid_helpers import JOYSTICK_FREE_COUNT, TRANSFER_ICON_FILE, right_cluster_width, station_col_widths
 logger = logging.getLogger(__name__)
 BG_MAIN = '#FFFFFF'
@@ -106,6 +106,7 @@ class StationCard(QFrame):
         self._joystick_count = JOYSTICK_FREE_COUNT
         self._session_start_dt = None
         self._session_billing_rate = 0.0
+        self._slot_billing = False
         self._charges_cache = (0.0, 0.0)
         self._charges_cache_mono = 0.0
         self._hdmi_cached = None
@@ -632,6 +633,7 @@ class StationCard(QFrame):
                 self._session_db_id = None
             self._session_start_dt = None
             self._session_billing_rate = 0.0
+            self._slot_billing = False
             self._vip_open = False
             self._vip_sum.setVisible(False)
             self._busy = False
@@ -648,7 +650,7 @@ class StationCard(QFrame):
         if not self._busy or self._session_db_id is None:
             return {}
         else:
-            payload = {'session_db_id': self._session_db_id, 'elapsed': self._elapsed, 'total_seconds': self._total_seconds, 'session_start_dt': self._session_start_dt, 'billing_rate': float(self._session_billing_rate or 0), 'extra': self._extra_amount(), 'vip': bool(self._vip_open), 'joystick_count': int(self._joystick_count)}
+            payload = {'session_db_id': self._session_db_id, 'elapsed': self._elapsed, 'total_seconds': self._total_seconds, 'session_start_dt': self._session_start_dt, 'billing_rate': float(self._session_billing_rate or 0), 'extra': self._extra_amount(), 'vip': bool(self._vip_open), 'joystick_count': int(self._joystick_count), 'slot_billing': bool(self._slot_billing)}
             self._stop_thread_only()
             return payload
     def _finalize_transfer_out(self) -> None:
@@ -660,6 +662,7 @@ class StationCard(QFrame):
         self._session_db_id = None
         self._session_start_dt = None
         self._session_billing_rate = 0.0
+        self._slot_billing = False
         self._vip_open = False
         self._vip_sum.setVisible(False)
         self._busy = False
@@ -787,6 +790,7 @@ class StationCard(QFrame):
                     if self._session_billing_rate <= 0:
                         from app.core.ps_billing import resolve_billing_rate
                         self._session_billing_rate = resolve_billing_rate(self.station_id, self._session_start_dt, None)
+                    self._slot_billing = bool(payload.get('slot_billing'))
                     self._joystick_count = int(payload.get('joystick_count') or JOYSTICK_FREE_COUNT + self._port.count_joystick_charges(self._session_db_id))
                     self._extra_spin.setValue(extra)
                     self._arm_unblock_protection()
@@ -823,6 +827,8 @@ class StationCard(QFrame):
             if self._session_billing_rate <= 0:
                 from app.core.ps_billing import resolve_billing_rate
                 self._session_billing_rate = resolve_billing_rate(self.station_id, start_dt, None)
+            from app.core.ps_billing import session_uses_slot_billing
+            self._slot_billing = (not is_vip) and session_uses_slot_billing(row.get('note'))
             if not is_vip and total_seconds <= 0:
                 try:
                     self._port.end_session(int(row['id']), 0, 0)
@@ -958,10 +964,16 @@ class StationCard(QFrame):
                     act = QAction(title, self)
                     act.triggered.connect(lambda checked=False, s=seconds: self._add_time_to_session(s))
                     menu.addAction(act)
+                act_sum = QAction("Swmmag'a ashiw", self)
+                act_sum.triggered.connect(lambda checked=False: self._open_amount_start(add_mode=True))
+                menu.addAction(act_sum)
         else:
             act_vip = QAction('VIP (vaqt va summa avtomatik)', self)
             act_vip.triggered.connect(self._open_vip_start)
             menu.addAction(act_vip)
+            act_sum = QAction("Swmmag'a ashiw", self)
+            act_sum.triggered.connect(lambda checked=False: self._open_amount_start())
+            menu.addAction(act_sum)
             menu.addSeparator()
             presets = [('30 daqiqa', 1800), ('45 daqiqa', 2700), ('1 soat', 3600), ('1 soat 15 daqiqa', 4500), ('1 soat 30 daqiqa', 5400), ('2 soat', 7200), ('3 soat', 10800)]
             for title, seconds in presets:
@@ -970,13 +982,22 @@ class StationCard(QFrame):
                 menu.addAction(act)
         pos = self._start_btn.mapToGlobal(self._start_btn.rect().bottomLeft())
         menu.exec(pos)
-    def _add_time_to_session(self, seconds: int) -> None:
+    def _add_time_to_session(self, seconds: int, *, slot_billing: bool=False) -> None:
         """Mavjud seansga vaqt qo\'shish."""
         if not self._busy or not self._timer_thread:
             return None
         else:
             self._total_seconds += seconds
             self._timer_thread.add_time(seconds)
+            if slot_billing:
+                self._slot_billing = True
+                if self._session_db_id is not None:
+                    try:
+                        import database as _db
+                        from app.core.ps_billing import SLOT_BILLING_NOTE
+                        _db.set_session_note(int(self._session_db_id), SLOT_BILLING_NOTE)
+                    except Exception:
+                        pass
             if self._session_db_id is not None:
                 self._port.update_session_total_seconds(self._session_db_id, self._total_seconds)
             QMessageBox.information(self, 'OK', f'{self.station_id} uchun {seconds // 60} daqiqa qo\'shildi.')
@@ -987,6 +1008,24 @@ class StationCard(QFrame):
             return
         else:
             self._start_vip_session()
+    def _open_amount_start(self, add_mode: bool=False) -> None:
+        from_dt = None
+        if add_mode:
+            if not self._busy or self._vip_open:
+                return
+            start = self._session_start_dt or trusted_now_naive()
+            from datetime import timedelta
+            from_dt = start + timedelta(seconds=max(0, int(self._total_seconds or 0)))
+        dlg = AmountStartDialog(self.station_id, self, add_mode=add_mode, from_dt=from_dt)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        seconds = int(dlg.seconds() or 0)
+        if seconds <= 0:
+            return
+        if add_mode:
+            self._add_time_to_session(seconds, slot_billing=True)
+            return
+        self._start_session(seconds, slot_billing=True, countdown_from_one=True)
     def _on_holat_check_clicked(self) -> None:
         """VIP stol ✓: yangi VIP hisob (TV o\'chmasdan) yoki bekor."""
         if not self._busy or not self._vip_open:
@@ -1024,17 +1063,24 @@ class StationCard(QFrame):
             return round(time_amount(rate, int(elapsed_seconds)), 2)
     def _ps_live_amount(self) -> float:
         """Jonli PLAYSTATION ustuni — qulflangan tarif, bazaga har soniya bormaslik."""
-        from app.core.ps_billing import time_amount, wall_seconds
+        from app.core.ps_billing import slot_playstation_amount, time_amount, wall_seconds
         now = trusted_now_naive()
         seconds = wall_seconds(self._session_start_dt, now)
+        if self._slot_billing and not self._vip_open:
+            return float(slot_playstation_amount(self.station_id, start=self._session_start_dt, seconds=seconds))
         rate = float(self._session_billing_rate or 0)
         if rate <= 0:
             from app.core.ps_billing import resolve_billing_rate
             rate = resolve_billing_rate(self.station_id, self._session_start_dt, None)
             self._session_billing_rate = rate
         return float(time_amount(rate, seconds))
-    def _ps_final_amount(self, *, was_vip: bool, start_dt: Optional[datetime], end_dt: datetime, booked_seconds: int, locked_rate: Optional[float]=None) -> float:
+    def _ps_final_amount(self, *, was_vip: bool, start_dt: Optional[datetime], end_dt: datetime, booked_seconds: int, locked_rate: Optional[float]=None, slot_billing: Optional[bool]=None) -> float:
         """STOP / rollover — yagona yakuniy PS summasi."""
+        use_slots = bool(self._slot_billing if slot_billing is None else slot_billing) and not was_vip
+        if use_slots:
+            from app.core.ps_billing import slot_playstation_amount
+            seconds = _ps_billable_seconds(is_vip=False, start=start_dt, end=end_dt, booked_seconds=booked_seconds)
+            return float(slot_playstation_amount(self.station_id, start=start_dt, seconds=seconds))
         return float(playstation_amount(self.station_id, is_vip=was_vip, start=start_dt, end=end_dt, booked_seconds=booked_seconds, locked_rate=locked_rate if locked_rate is not None else self._session_billing_rate or None))
     def _extra_amount(self) -> float:
         return float(self._extra_spin.value())
@@ -1213,6 +1259,7 @@ class StationCard(QFrame):
                 self._joystick_test_active = False
                 self._joystick_count = JOYSTICK_FREE_COUNT
                 self._vip_open = True
+                self._slot_billing = False
                 self._total_seconds = 0
                 self._elapsed = 0
                 self._busy = True
@@ -1289,7 +1336,7 @@ class StationCard(QFrame):
         val, ok = QInputDialog.getInt(self, 'Maxsus vaqt', 'Daqiqa kiriting:', value=60, min=1, max=1440)
         if ok:
             self._start_session(val * 60)
-    def _start_session(self, seconds: int) -> None:
+    def _start_session(self, seconds: int, *, slot_billing: bool=False, countdown_from_one: bool=False) -> None:
         if self._busy:
             QMessageBox.information(self, 'Band', f'{self.station_id} hozir band.')
             return
@@ -1309,8 +1356,10 @@ class StationCard(QFrame):
                 self._joystick_count = JOYSTICK_FREE_COUNT
                 self._vip_open = False
                 self._vip_sum.setVisible(False)
+                self._slot_billing = bool(slot_billing)
                 self._total_seconds = seconds
-                self._elapsed = 0
+                initial_elapsed = 1 if countdown_from_one and seconds > 1 else 0
+                self._elapsed = initial_elapsed
                 self._busy = True
                 self._session_start_dt = trusted_now_naive()
                 self._arm_unblock_protection()
@@ -1323,12 +1372,16 @@ class StationCard(QFrame):
                     import database as _db
                     row = _db.get_session_by_id(int(self._session_db_id))
                     self._session_billing_rate = float((row or {}).get('billing_rate') or 0)
+                    if self._slot_billing:
+                        from app.core.ps_billing import SLOT_BILLING_NOTE
+                        _db.set_session_note(int(self._session_db_id), SLOT_BILLING_NOTE)
                 except Exception:
                     from app.core.ps_billing import resolve_billing_rate
                     self._session_billing_rate = resolve_billing_rate(self.station_id, self._session_start_dt, None)
                 self._set_status('BAND', STATUS_BUSY)
-                self._timer_lbl.setText(self._format_seconds(seconds))
-                self._timer_thread = SessionTimer(seconds, self)
+                remaining = max(0, seconds - initial_elapsed)
+                self._timer_lbl.setText(self._format_seconds(remaining))
+                self._timer_thread = SessionTimer(seconds, self, initial_elapsed=initial_elapsed)
                 self._timer_thread.tick.connect(self._on_tick)
                 self._timer_thread.session_ended.connect(self._on_natural_end)
                 self._timer_thread.start()
@@ -1458,6 +1511,7 @@ class StationCard(QFrame):
             total_seconds_snap = int(self._total_seconds or 0)
             session_db_id = self._session_db_id
             locked_rate_snap = float(self._session_billing_rate or 0)
+            slot_billing_snap = bool(self._slot_billing) and not was_vip
             session_end_dt = trusted_now_naive()
             session_start_dt = self._resolve_session_start_dt(session_db_id, self._session_start_dt)
             if locked_rate_snap <= 0:
@@ -1484,6 +1538,7 @@ class StationCard(QFrame):
             self._session_db_id = None
             self._session_start_dt = None
             self._session_billing_rate = 0.0
+            self._slot_billing = False
             self._vip_open = False
             self._vip_sum.setVisible(False)
             self._busy = False
@@ -1545,7 +1600,7 @@ class StationCard(QFrame):
                     joystick_total = 0.0
                     buyurtma_total = 0.0
                     goods_total = 0.0
-            time_rev = self._ps_final_amount(was_vip=was_vip, start_dt=session_start_dt, end_dt=session_end_dt, booked_seconds=total_seconds_snap, locked_rate=locked_rate_snap or None)
+            time_rev = self._ps_final_amount(was_vip=was_vip, start_dt=session_start_dt, end_dt=session_end_dt, booked_seconds=total_seconds_snap, locked_rate=locked_rate_snap or None, slot_billing=slot_billing_snap)
             from app.core.money import round_to_thousand
             goods_bill = round_to_thousand(goods_total)
             buy_show = round_to_thousand(buyurtma_total)

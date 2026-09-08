@@ -406,7 +406,7 @@ def webos_launch_app(tv_ip: str, app_id: str, params: Optional[dict[str, Any]]=N
             return False
         else:
             lock = _webos_launch_lock(host)
-            if not lock.acquire(timeout=12):
+            if not lock.acquire(timeout=3):
                 logger.warning('webOS launch lock timeout: %s', host)
                 return False
             else:
@@ -420,7 +420,7 @@ def webos_launch_app(tv_ip: str, app_id: str, params: Optional[dict[str, Any]]=N
                     if params:
                         payload = json.dumps(params, ensure_ascii=False, separators=(',', ':'))
                         args.extend(['-p', payload])
-                    res = _run_cmd(args, timeout=25)
+                    res = _run_cmd(args, timeout=8)
                     out = (res.stdout or '') + (res.stderr or '')
                     if res.returncode == 0 or 'launched' in out.lower():
                         msg = f'webOS launch OK ({tag}): {host} device={device}'
@@ -442,12 +442,12 @@ def webos_launch_hdmi(tv_ip: str, hdmi_input: int=1) -> bool:
     """LG tizim HDMI ilovasi — START da PS portiga o\'tish."""
     app_id = webos_hdmi_app_id(hdmi_input)
     return webos_launch_app(tv_ip, app_id, label=app_id)
-def webos_wait_until_online(tv_ip: str, timeout_s: float=10.0) -> bool:
+def webos_wait_until_online(tv_ip: str, timeout_s: float=3.0) -> bool:
     """Wake-on-LAN dan keyin webOS SSH porti ochilishini kutish."""
     host = _webos_host(tv_ip)
     deadline = time.time() + max(1.0, timeout_s)
     while time.time() < deadline:
-        if webos_port_open(host, timeout=0.35):
+        if webos_port_open(host, timeout=0.6):
             clear_ares_device_cache(host)
             return True
         time.sleep(0.25)
@@ -460,7 +460,7 @@ def webos_power_off(tv_ip: str, *, pc_ip: str='', gate_url: str='', hdmi_input: 
     else:
         cancel_webos_lock_tasks(host)
         params = build_launch_params(pc_ip, host, gate_url, action='poweroff', hdmi_input=hdmi_input)
-        ok = _retry_call(webos_launch, host, params, attempts=2, delays=(0.0, 0.4))
+        ok = _retry_call(webos_launch, host, params, attempts=2, delays=(0.0, 0.25))
         if ok:
             print(f'[TVPlatform] webOS STOP -> power off: {host}')
             logger.info('webOS STOP power off OK: %s', host)
@@ -650,7 +650,7 @@ def smart_tv_block(tv_ip: str, *, pc_ip: str, gate_url: str, brand: str, lock_br
         if is_webos_brand(brand):
             if try_install:
                 webos_install_if_needed(tv_ip)
-            launched = _retry_call(webos_launch, tv_ip, params, attempts=3, delays=(0.0, 0.6, 1.5))
+            launched = _retry_call(webos_launch, tv_ip, params, attempts=2, delays=(0.0, 0.3))
             if not launched:
                 launched = webos_force_lock(tv_ip, params)
             if launched:
@@ -675,15 +675,16 @@ def smart_tv_unblock(tv_ip: str, *, pc_ip: str, gate_url: str, brand: str, hdmi_
         params = build_launch_params(pc_ip, tv_ip, gate_url, action='idle', hdmi_input=hdmi_input)
         if is_webos_brand(brand):
             cancel_webos_lock_tasks(tv_ip)
-            hdmi_ok = _retry_call(webos_launch_hdmi, tv_ip, hdmi_input, attempts=2, delays=(0.0, 0.35))
+            hdmi_ok = _retry_call(webos_launch_hdmi, tv_ip, hdmi_input, attempts=2, delays=(0.0, 0.25))
             if hdmi_ok:
                 print(f'[TVPlatform] webOS START -> HDMI{hdmi_input}: {tv_ip}')
                 logger.info('webOS START -> HDMI%s OK: %s', hdmi_input, tv_ip)
             else:
-                if _retry_call(webos_launch, tv_ip, params, attempts=2, delays=(0.0, 0.4)):
-                    logger.info('webOS START idle (HDMI zaxira): %s HDMI=%s', tv_ip, hdmi_input)
-                else:
-                    logger.warning('webOS START xato (HDMI va idle): %s', tv_ip)
+                def _hdmi_retry() -> None:
+                    time.sleep(0.5)
+                    webos_launch_hdmi(tv_ip, hdmi_input)
+                threading.Thread(target=_hdmi_retry, daemon=True, name='webos-hdmi-retry').start()
+                logger.warning('webOS START HDMI kechikdi, qayta urinish: %s', tv_ip)
         else:
             if is_tizen_brand(brand):
                 if not tizen_launch(tv_ip, params):

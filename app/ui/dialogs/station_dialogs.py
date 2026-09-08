@@ -1,7 +1,8 @@
 """Stol kartasi dialoglari: transfer, ovoz, buyurtma turi, VIP."""
 from __future__ import annotations
 from typing import Optional
-from PyQt6.QtCore import Qt
+from datetime import datetime
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget
 from app.tv.tv_handler import TVHandler
@@ -197,6 +198,100 @@ class VIPStartDialog(QDialog):
         lay.addStretch(1)
         lay.addWidget(buttons)
         self.setStyleSheet(f'\n            QDialog {{\n                background-color: {BG_CARD};\n                border: 1px solid {BORDER_COLOR};\n                border-radius: 12px;\n            }}\n            QLabel {{ color: {TEXT_PRIMARY}; }}\n            QPushButton {{\n                background-color: #111111;\n                color: #FFFFFF;\n                font-weight: 800;\n                font-size: 14px;\n                padding: 10px 20px;\n                border-radius: 6px;\n                border: none;\n                min-width: 120px;\n            }}\n            QPushButton:hover {{\n                background-color: #333333;\n            }}\n            ')
+class AmountStartDialog(QDialog):
+    """Swmmag'a ashiw: kiritilgan pulga qancha vaqt to'g'ri kelishini ko'rsatadi."""
+    def __init__(self, station_id: str, parent: Optional[QWidget]=None, *, add_mode: bool=False, from_dt: Optional[datetime]=None) -> None:
+        super().__init__(parent)
+        self._station_id = station_id
+        self._add_mode = bool(add_mode)
+        self._from_dt = from_dt
+        self._seconds = 0
+        self.setWindowTitle("Swmmag'a ashiw")
+        self.setMinimumWidth(420)
+        self.setModal(True)
+        title = QLabel("Swmmag'a ashiw")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(f'color:{ACCENT};font-size:22px;font-weight:900;')
+        tip = QLabel('Mijoz olib kelgan summani kiriting. Vaqt stol tarifiga qarab avtomatik hisoblanadi (kun/kechki narx alohida).')
+        tip.setWordWrap(True)
+        tip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tip.setStyleSheet(f'color:{TEXT_SECONDARY};font-size:12px;')
+        self._amount = QDoubleSpinBox()
+        self._amount.setRange(0, 1000000000)
+        self._amount.setDecimals(0)
+        self._amount.setSingleStep(1000)
+        self._amount.setGroupSeparatorShown(True)
+        self._amount.setSuffix(" so'm")
+        self._amount.setMinimumHeight(52)
+        self._amount.setStyleSheet(f'font-size:24px;font-weight:800;padding:10px;border:2px solid {ACCENT};border-radius:10px;')
+        from app.ui.widgets.money_spin import install_clear_zero_on_edit
+        install_clear_zero_on_edit(self._amount)
+        self._preview = QLabel('Summa kiriting')
+        self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._preview.setWordWrap(True)
+        self._preview.setStyleSheet(f'color:{COL_CYAN};font-size:16px;font-weight:800;')
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        self._ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        cancel = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if self._ok:
+            self._ok.setText('Boshlash' if not add_mode else "Qo'shish")
+            self._ok.setMinimumHeight(44)
+            self._ok.setEnabled(False)
+        if cancel:
+            cancel.setText('Bekor')
+            cancel.setMinimumHeight(44)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 24, 28, 24)
+        lay.setSpacing(14)
+        lay.addWidget(title)
+        lay.addWidget(tip)
+        lay.addWidget(self._amount)
+        lay.addWidget(self._preview)
+        lay.addWidget(buttons)
+        self.setStyleSheet(f'QDialog {{ background-color: {BG_CARD}; border: 1px solid {BORDER_COLOR}; border-radius: 12px; }} QLabel {{ color: {TEXT_PRIMARY}; }}')
+        self._amount.valueChanged.connect(self._refresh_preview)
+        self._clock = QTimer(self)
+        self._clock.setInterval(1000)
+        self._clock.timeout.connect(self._refresh_preview)
+        self._clock.start()
+        self._refresh_preview()
+    def _start_dt(self):
+        if self._from_dt is not None:
+            return self._from_dt
+        try:
+            from app.core.network_time import trusted_now_naive
+            return trusted_now_naive()
+        except Exception:
+            return datetime.now()
+    def _refresh_preview(self) -> None:
+        amount = float(self._amount.value() or 0)
+        from app.core.ps_billing import prepaid_seconds_for_station, slot_playstation_amount
+        start = self._start_dt()
+        seconds = prepaid_seconds_for_station(self._station_id, amount, start)
+        self._seconds = int(seconds)
+        if self._ok:
+            self._ok.setEnabled(self._seconds > 0)
+        if amount <= 0:
+            self._preview.setText('Summa kiriting')
+            return
+        if self._seconds <= 0:
+            self._preview.setText("Bu summaga vaqt chiqmadi — stol narxini tekshiring.")
+            return
+        shown = max(0, self._seconds - 1)
+        cost = slot_playstation_amount(self._station_id, start=start, seconds=self._seconds)
+        self._preview.setText(f'Vaqt: {_format_seconds(self._seconds)}  →  sanash: {_format_seconds(shown)}\nHisob: {cost:,.0f} so\'m')
+    def _accept(self) -> None:
+        self._refresh_preview()
+        if self._seconds <= 0:
+            QMessageBox.warning(self, "Swmmag'a ashiw", "To'g'ri summa kiriting.")
+            return
+        self.accept()
+    def seconds(self) -> int:
+        return int(self._seconds)
+    def amount(self) -> float:
+        return float(self._amount.value() or 0)
 class BuyurtmaDialog(QDialog):
     """Ochiq stolga tashqi buyurtma (summa + sipatlama)."""
     def __init__(self, station_label: str='', parent: Optional[QWidget]=None) -> None:
