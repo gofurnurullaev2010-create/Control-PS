@@ -475,12 +475,6 @@ class MainWindow(QMainWindow):
         if self._bar_grid is None:
             return
         else:
-            while self._bar_grid.count():
-                item = self._bar_grid.takeAt(0)
-                w = item.widget()
-                if w is not None:
-                    w.deleteLater()
-            self._bar_cards.clear()
             products_meta = []
             try:
                 for item in db.get_drink_prices():
@@ -500,6 +494,19 @@ class MainWindow(QMainWindow):
                 products_meta = db.sort_products_by_bar_order(products_meta)
             except Exception as e:
                 logger.warning('BAR katalog yangilanmadi: %s', e)
+            from app.ui.widgets.product_card import catalog_signature
+            sig = catalog_signature(products_meta, db.bar_product_key)
+            if sig == getattr(self, '_bar_sig', None) and self._bar_cards:
+                self._content_title.setText(f'BAR ({len(products_meta)})')
+                self._on_search_changed(self._search.text())
+                return
+            self._bar_sig = sig
+            while self._bar_grid.count():
+                item = self._bar_grid.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
+            self._bar_cards.clear()
             self._bar_products = list(products_meta)
             cols = 7
             for i, meta in enumerate(products_meta):

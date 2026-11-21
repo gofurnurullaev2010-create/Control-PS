@@ -255,13 +255,20 @@ class MainWindow(QMainWindow):
         if self._bar_grid is None:
             return
         else:
+            products = self._container.inventory.all_products_for_display()
+            from app.ui.widgets.product_card import catalog_signature
+            sig = catalog_signature(products, self._bar_product_key)
+            if sig == getattr(self, '_bar_sig', None) and self._bar_cards:
+                self._content_title.setText(f'BAR ({len(products)})')
+                self._on_search(self._search.text())
+                return
+            self._bar_sig = sig
             while self._bar_grid.count():
                 item = self._bar_grid.takeAt(0)
                 w = item.widget()
                 if w is not None:
                     w.deleteLater()
             self._bar_cards.clear()
-            products = self._container.inventory.all_products_for_display()
             self._bar_products = list(products)
             cols = 7
             for i, p in enumerate(products):

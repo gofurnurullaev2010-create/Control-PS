@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Any, List, Optional
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont, QPixmap, QImage
+from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 def _fmt(v: float) -> str:
     return f'{float(v or 0):,.0f}'.replace(',', ' ')
@@ -26,24 +26,12 @@ class WarehousePage(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setStyleSheet('\n            QTableWidget {\n                background: #FFFFFF; border: none; gridline-color: #F0F1F4;\n                font-size: 14px;\n            }\n            QHeaderView::section {\n                background: #FFFFFF; color: #5F6368; padding: 10px 8px;\n                border: none; border-bottom: 1px solid #E5E7EB; font-weight: 800;\n            }\n            QTableWidget::item { padding: 6px; border-bottom: 1px solid #F0F1F4; }\n            ')
         lay.addWidget(self.table)
-        self._pix_cache: dict[tuple, QPixmap] = {}
-    def _thumb(self, raw: object) -> Optional[QPixmap]:
-        if not raw:
-            return None
-        data = bytes(raw)
-        key = (len(data), data[:24])
-        cached = self._pix_cache.get(key)
-        if cached is not None:
-            return cached
-        img = QImage()
-        if not img.loadFromData(data) or img.isNull():
-            return None
-        pix = QPixmap.fromImage(img.scaled(52, 52, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation))
-        if len(self._pix_cache) > 400:
-            self._pix_cache.clear()
-        self._pix_cache[key] = pix
-        return pix
     def set_products(self, products: List[dict[str, Any]]) -> None:
+        from app.ui.widgets.product_card import catalog_signature
+        sig = catalog_signature(products, lambda p: (p.get('kind'), p.get('name')))
+        if sig == getattr(self, '_sig', None):
+            return
+        self._sig = sig
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(len(products))
         self.table.verticalHeader().setDefaultSectionSize(64)
@@ -57,7 +45,8 @@ class WarehousePage(QWidget):
             img_lbl.setFixedSize(56, 56)
             img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             img_lbl.setStyleSheet('background: #F8FAFC; border-radius: 6px;')
-            pix = self._thumb(p.get('image'))
+            from app.ui.widgets.product_card import thumb_pixmap
+            pix = thumb_pixmap(p.get('image'), 52, 52)
             if pix is not None and (not pix.isNull()):
                 img_lbl.setPixmap(pix)
             else:
