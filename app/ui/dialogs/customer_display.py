@@ -546,9 +546,11 @@ class CustomerDisplayWindow(QWidget):
         detail = labels.get('detail')
         if isinstance(detail, QWidget):
             detail.setVisible(busy)
-        frame.setObjectName('CustomerCardBusy' if busy else 'CustomerCard')
-        frame.style().unpolish(frame)
-        frame.style().polish(frame)
+        busy_name = 'CustomerCardBusy' if busy else 'CustomerCard'
+        if frame.objectName() != busy_name:
+            frame.setObjectName(busy_name)
+            frame.style().unpolish(frame)
+            frame.style().polish(frame)
         if not busy:
             return
         started = '—'
@@ -563,7 +565,10 @@ class CustomerDisplayWindow(QWidget):
         goods, joystick = (0.0, 0.0)
         if card._session_db_id is not None:
             try:
-                goods, joystick = db.split_session_charges(sid, card._session_db_id)
+                if hasattr(card, '_session_goods_joy'):
+                    goods, joystick = card._session_goods_joy()
+                else:
+                    goods, joystick = db.split_session_charges(sid, card._session_db_id)
             except Exception:
                 goods, joystick = (0.0, 0.0)
         extra = float(card._extra_amount()) if hasattr(card, '_extra_amount') else 0.0

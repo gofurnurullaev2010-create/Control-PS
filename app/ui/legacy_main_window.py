@@ -398,7 +398,7 @@ class MainWindow(QMainWindow):
                                 self._content_title.setText(f'Kassa parqi ({self._cash_diff_page.table.rowCount()})')
                             else:
                                 if key == 'debtors':
-                                    self._debtors_page.set_search(self._search.text())
+                                    self._debtors_page.set_search(self._search.text(), refresh=False)
                                     self._debtors_page.reload()
                                     self._content_title.setText('Qarizdarlar')
                                 else:
@@ -416,7 +416,7 @@ class MainWindow(QMainWindow):
                                                 self._reload_expenses_page()
                                         else:
                                             if key == 'clients':
-                                                self._clients_page.set_search(self._search.text())
+                                                self._clients_page.set_search(self._search.text(), refresh=False)
                                                 self._clients_page.reload()
                                                 self._content_title.setText(f'Klientler ({self._clients_page.table.rowCount()})')
                                             else:

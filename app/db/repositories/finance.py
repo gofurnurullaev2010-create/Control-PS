@@ -5,6 +5,8 @@ class FinanceRepository:
     """Qarzdorlar, bronlar, xarajatlar, operator hisobotlari."""
     def list_debtors(self, search: str='', day: Optional[str]=None, include_paid: bool=False) -> List[dict[str, Any]]:
         return legacy.module().list_debtors(search, day, include_paid)
+    def list_client_contacts(self) -> List[dict[str, Any]]:
+        return legacy.module().list_client_contacts()
     def debtor_day_summary(self, include_paid: bool=False):
         return legacy.module().debtor_day_summary(include_paid)
     def add_debtor(self, client_name: str, phone: str, amount: float, note: str='') -> int:

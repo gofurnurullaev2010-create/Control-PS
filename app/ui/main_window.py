@@ -456,7 +456,7 @@ class MainWindow(QMainWindow):
                                     self._content_title.setText(f'Sklad ({len(products)})')
                                 else:
                                     if key == 'debtors':
-                                        self._debtors_page.set_search(self._search.text())
+                                        self._debtors_page.set_search(self._search.text(), refresh=False)
                                         self._debtors_page.reload()
                                         self._content_title.setText('Qarizdarlar')
                                     else:
@@ -472,7 +472,7 @@ class MainWindow(QMainWindow):
                                                 self._content_title.setText(f'Qa\'rejetler ({self._expenses_page.row_count()})')
                                             else:
                                                 if key == 'clients':
-                                                    self._clients_page.set_search(self._search.text())
+                                                    self._clients_page.set_search(self._search.text(), refresh=False)
                                                     self._clients_page.reload()
                                                     self._content_title.setText(f'Klientler ({self._clients_page.table.rowCount()})')
                                                 else:

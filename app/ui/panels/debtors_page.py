@@ -2,9 +2,9 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable, Optional
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PyQt6.QtGui import QColor, QFont
-from PyQt6.QtWidgets import QAbstractItemView, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QAbstractItemView, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QStackedWidget, QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 import database as db
 from app.ui.dialogs.colors import BG_CARD, BG_HEADER, BORDER_COLOR, COL_RED, TEXT_PRIMARY, TEXT_SECONDARY
 from app.ui.dialogs.finance_dialogs import DebtorAddDialog
@@ -34,6 +34,54 @@ def _fmt_dt_long(value: str) -> str:
         return f'{d}  {t}'
     else:
         return d or '—'
+class _DebtorsModel(QAbstractTableModel):
+    """Ko'rinadigan qatorlarnigina chizadi — minglab qarzdor ham oynani qotitmaydi."""
+    _headers = ['Klient', "Qariz mug'dari", 'Qariz waqti']
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._rows: list[dict[str, Any]] = []
+    def set_rows(self, rows: list[dict[str, Any]]) -> None:
+        self.beginResetModel()
+        self._rows = list(rows)
+        self.endResetModel()
+    def rowCount(self, parent: QModelIndex | None=None) -> int:
+        if parent is not None and parent.isValid():
+            return 0
+        return len(self._rows)
+    def columnCount(self, parent: QModelIndex | None=None) -> int:
+        if parent is not None and parent.isValid():
+            return 0
+        return 3
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal and 0 <= section < 3:
+            return self._headers[section]
+        return None
+    def data(self, index: QModelIndex, role: int=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        row = self._rows[index.row()]
+        col = index.column()
+        if role == Qt.ItemDataRole.DisplayRole:
+            if col == 0:
+                name = str(row.get('client_name') or '')
+                phone = str(row.get('phone') or '')
+                return f'{name} - {phone}' if phone else name
+            if col == 1:
+                return _fmt_money(float(row.get('amount') or 0))
+            day, clock = _split_dt(str(row.get('debt_time') or ''))
+            return f'{day}  {clock}' if clock else day
+        if role == Qt.ItemDataRole.ForegroundRole and col == 1:
+            return QColor(COL_RED)
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            if col == 1:
+                return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            if col == 2:
+                return int(Qt.AlignmentFlag.AlignCenter)
+        return None
+    def row_dict(self, row: int) -> Optional[dict[str, Any]]:
+        if 0 <= row < len(self._rows):
+            return self._rows[row]
+        return None
 class DebtorsPage(QWidget):
     """3 panel: kunlar, qarzdorlar jadvali, o\'ngda Qariz yoki Klient mag\'liwmati."""
     def __init__(self, parent=None, on_changed: Optional[Callable[[], None]]=None) -> None:
@@ -52,18 +100,20 @@ class DebtorsPage(QWidget):
         root.addWidget(self.days)
         mid = QVBoxLayout()
         mid.setSpacing(0)
-        self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(['Klient', 'Qariz mug\'dari', 'Qariz waqti'])
+        self._model = _DebtorsModel(self)
+        self.table = QTableView()
+        self.table.setModel(self._model)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(48)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setStyleSheet(f'\n            QTableWidget {{ background: {BG_CARD}; border: 1px solid {BORDER_COLOR}; border-radius: 10px; }}\n            QHeaderView::section {{\n                background: {BG_HEADER}; padding: 8px; border: none;\n                border-bottom: 1px solid {BORDER_COLOR}; font-weight: 800;\n            }}\n            QTableWidget::item:selected {{ background: #E8EDF5; color: {TEXT_PRIMARY}; }}\n            ')
-        self.table.itemSelectionChanged.connect(self._on_row_selected)
+        self.table.setWordWrap(False)
+        self.table.setStyleSheet(f'\n            QTableView {{ background: {BG_CARD}; border: 1px solid {BORDER_COLOR}; border-radius: 10px; }}\n            QHeaderView::section {{\n                background: {BG_HEADER}; padding: 8px; border: none;\n                border-bottom: 1px solid {BORDER_COLOR}; font-weight: 800;\n            }}\n            QTableView::item:selected {{ background: #E8EDF5; color: {TEXT_PRIMARY}; }}\n            ')
+        self.table.selectionModel().selectionChanged.connect(self._on_row_selected)
         mid.addWidget(self.table)
         root.addLayout(mid, 1)
         self.detail_stack = QStackedWidget()
@@ -172,9 +222,12 @@ class DebtorsPage(QWidget):
         self._c_table.setMaximumHeight(280)
         lay.addWidget(self._c_table, 1)
         return w
-    def set_search(self, text: str) -> None:
-        self._search = (text or '').strip()
-        self._reload_table()
+    def set_search(self, text: str, *, refresh: bool=True) -> None:
+        text = (text or '').strip()
+        same = text == getattr(self, '_search', None) and getattr(self, '_table_ready', False)
+        self._search = text
+        if refresh and not same:
+            self._reload_table()
     def reload(self) -> None:
         self._search = getattr(self, '_search', '')
         self._reload_days()
@@ -216,38 +269,26 @@ class DebtorsPage(QWidget):
     def _reload_table(self) -> None:
         rows = db.list_debtors(getattr(self, '_search', ''), self._selected_day)
         self._rows = rows
-        self.table.setRowCount(len(rows))
-        self.table.verticalHeader().setDefaultSectionSize(48)
-        for i, r in enumerate(rows):
-            name = str(r.get('client_name', '') or '')
-            phone = str(r.get('phone', '') or '')
-            label = f'{name} - {phone}' if phone else name
-            name_item = QTableWidgetItem(label)
-            amount_item = QTableWidgetItem(_fmt_money(float(r.get('amount', 0) or 0)))
-            amount_item.setForeground(QColor(COL_RED))
-            amount_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            d, t = _split_dt(str(r.get('debt_time', '') or ''))
-            time_item = QTableWidgetItem(f'{d}\n{t}' if t else d)
-            time_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(i, 0, name_item)
-            self.table.setItem(i, 1, amount_item)
-            self.table.setItem(i, 2, time_item)
-            self.table.setRowHeight(i, 48)
+        self.table.setUpdatesEnabled(False)
+        try:
+            self._model.set_rows(rows)
+        finally:
+            self.table.setUpdatesEnabled(True)
+        self._table_ready = True
         if not rows:
             self._current = None
             self.detail_stack.setCurrentIndex(0)
-    def _on_row_selected(self) -> None:
+    def _on_row_selected(self, *_args) -> None:
         rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
         if not rows:
             return
-        else:
-            idx = rows[0].row()
-            if idx < 0 or idx >= len(self._rows):
-                return None
-            else:
-                self._current = self._rows[idx]
-                self._fill_debt_panel(self._current)
-                self.detail_stack.setCurrentIndex(1)
+        idx = rows[0].row()
+        current = self._model.row_dict(idx)
+        if current is None:
+            return
+        self._current = current
+        self._fill_debt_panel(current)
+        self.detail_stack.setCurrentIndex(1)
     def _fill_debt_panel(self, r: dict[str, Any]) -> None:
         name = str(r.get('client_name', '') or '')
         phone = str(r.get('phone', '') or '')
@@ -295,7 +336,7 @@ class DebtorsPage(QWidget):
         else:
             name = str(self._current.get('client_name', '') or '')
             phone = str(self._current.get('phone', '') or '')
-            all_rows = [r for r in db.list_debtors('', include_paid=False) if str(r.get('client_name') or '') == name and str(r.get('phone') or '') == phone]
+            all_rows = db.list_debts_for_client(name, phone, include_paid=False)
             if not all_rows:
                 all_rows = [self._current]
             self._c_name.setText(name or '—')
@@ -330,7 +371,7 @@ class DebtorsPage(QWidget):
         else:
             name = str(self._current.get('client_name') or '')
             phone = str(self._current.get('phone') or '')
-            open_rows = [r for r in db.list_debtors('', include_paid=False) if str(r.get('client_name') or '') == name and str(r.get('phone') or '') == phone]
+            open_rows = db.list_debts_for_client(name, phone, include_paid=False)
             total = sum((float(r.get('amount') or 0) for r in open_rows))
             if total <= 0:
                 QMessageBox.information(self, 'Qariz', 'Ochiq qariz yo\'q.')

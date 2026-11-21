@@ -38,41 +38,12 @@ def _fmt_dt_short(value: str) -> str:
     d, _ = _split_dt(value)
     return d or '—'
 def list_clients_aggregated(search: str='') -> list[dict[str, Any]]:
-    """Klientlar: qarzdorlar + bronlar bo\'yicha guruhlangan."""
+    """Klientlar: bazada guruhlangan (har bir qarz qatori xotiraga olinmaydi)."""
     q = (search or '').strip().lower()
-    clients = {}
-    def _key(name: str, phone: str) -> tuple[str, str]:
-        return ((name or '').strip(), (phone or '').strip())
-    def _touch(name: str, phone: str, when: str='') -> dict[str, Any]:
-        key = _key(name, phone)
-        if not key[0] and (not key[1]):
-            return {}
-        else:
-            item = clients.setdefault(key, {'name': key[0], 'phone': key[1], 'debt': 0.0, 'created': when or '', 'debts': []})
-            if when:
-                if not item['created'] or str(when) < str(item['created']):
-                    item['created'] = when
-            return item
     try:
-        for r in db.list_debtors('', include_paid=True):
-            name = str(r.get('client_name') or '')
-            phone = str(r.get('phone') or '')
-            item = _touch(name, phone, str(r.get('debt_time') or ''))
-            if not item:
-                continue
-            else:
-                if not r.get('paid'):
-                    amt = float(r.get('amount') or 0)
-                    item['debt'] = float(item.get('debt') or 0) + amt
-                    item['debts'].append(dict(r))
+        rows = db.list_client_contacts()
     except Exception:
-        pass
-    try:
-        for r in db.list_bookings('', include_closed=True):
-            _touch(str(r.get('client_name') or ''), str(r.get('phone') or ''), str(r.get('booking_time') or r.get('created_time') or ''))
-    except Exception:
-        pass
-    rows = list(clients.values())
+        rows = []
     if q:
         rows = [c for c in rows if q in str(c.get('name') or '').lower() or q in str(c.get('phone') or '').lower()]
     rows.sort(key=lambda c: str(c.get('created') or ''), reverse=True)
@@ -188,36 +159,46 @@ class ClientsPage(QWidget):
         self._body.hide()
         root.addWidget(self._detail)
         self.reload()
-    def set_search(self, text: str) -> None:
-        self._search = (text or '').strip()
-        self.reload()
+    def set_search(self, text: str, *, refresh: bool=True) -> None:
+        text = (text or '').strip()
+        same = text == getattr(self, '_search', None) and getattr(self, '_table_ready', False)
+        self._search = text
+        if refresh and not same:
+            self.reload()
     def reload(self) -> None:
         prev = None
         if self._current:
             prev = (self._current.get('name'), self._current.get('phone'))
         self._rows = list_clients_aggregated(self._search)
-        self.table.setRowCount(len(self._rows))
-        self.table.verticalHeader().setDefaultSectionSize(44)
+        self.table.setUpdatesEnabled(False)
+        self.table.blockSignals(True)
         select_row = (-1)
-        for i, c in enumerate(self._rows):
-            no = QTableWidgetItem(str(i + 1))
-            no.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            name = QTableWidgetItem(str(c.get('name') or '—'))
-            phone = QTableWidgetItem(str(c.get('phone') or '—'))
-            debt = float(c.get('debt') or 0)
-            debt_item = QTableWidgetItem(_fmt_money(debt))
-            debt_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            if debt > 0:
-                debt_item.setForeground(QColor(COL_RED))
-            when = QTableWidgetItem(_fmt_dt_short(str(c.get('created') or '')))
-            when.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(i, 0, no)
-            self.table.setItem(i, 1, name)
-            self.table.setItem(i, 2, phone)
-            self.table.setItem(i, 3, debt_item)
-            self.table.setItem(i, 4, when)
-            if prev and (c.get('name'), c.get('phone')) == prev:
+        try:
+            self.table.setRowCount(len(self._rows))
+            self.table.verticalHeader().setDefaultSectionSize(44)
+            for i, c in enumerate(self._rows):
+                no = QTableWidgetItem(str(i + 1))
+                no.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                name = QTableWidgetItem(str(c.get('name') or '—'))
+                phone = QTableWidgetItem(str(c.get('phone') or '—'))
+                debt = float(c.get('debt') or 0)
+                debt_item = QTableWidgetItem(_fmt_money(debt))
+                debt_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if debt > 0:
+                    debt_item.setForeground(QColor(COL_RED))
+                when = QTableWidgetItem(_fmt_dt_short(str(c.get('created') or '')))
+                when.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.table.setItem(i, 0, no)
+                self.table.setItem(i, 1, name)
+                self.table.setItem(i, 2, phone)
+                self.table.setItem(i, 3, debt_item)
+                self.table.setItem(i, 4, when)
+                if prev and (c.get('name'), c.get('phone')) == prev:
                     select_row = i
+        finally:
+            self._table_ready = True
+            self.table.blockSignals(False)
+            self.table.setUpdatesEnabled(True)
         if select_row >= 0:
             self.table.selectRow(select_row)
             self._show_detail(self._rows[select_row])
@@ -296,7 +277,7 @@ class ClientsPage(QWidget):
         self._c_total.setText(_fmt_money(debt))
         debts = list(c.get('debts') or [])
         if not debts and name:
-                debts = [r for r in db.list_debtors('', include_paid=False) if str(r.get('client_name') or '') == name and str(r.get('phone') or '') == phone]
+            debts = db.list_debts_for_client(name, phone, include_paid=False)
         self._c_debts_badge.setText(str(len(debts)))
         self._c_debts_title.setText('Qarizlari')
         self._btn_pay.setEnabled(debt > 0)
@@ -365,7 +346,7 @@ class ClientsPage(QWidget):
         else:
             name = str(self._current.get('name') or '')
             phone = str(self._current.get('phone') or '')
-            open_rows = [r for r in db.list_debtors('', include_paid=False) if str(r.get('client_name') or '') == name and str(r.get('phone') or '') == phone]
+            open_rows = db.list_debts_for_client(name, phone, include_paid=False)
             total = sum((float(r.get('amount') or 0) for r in open_rows))
             if total <= 0:
                 QMessageBox.information(self, 'Qariz', 'Ochiq qariz yo\'q.')

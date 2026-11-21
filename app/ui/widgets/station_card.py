@@ -312,7 +312,7 @@ class StationCard(QFrame):
         """Tovar/jostik: 0.8s kesh — har soniya SQLite ochilmasin."""
         import time
         now = time.monotonic()
-        if (not force) and self._session_db_id is not None and (now - float(self._charges_cache_mono or 0)) < 0.8:
+        if (not force) and self._session_db_id is not None and (now - float(self._charges_cache_mono or 0)) < 2.5:
             return self._charges_cache
         goods_total = 0.0
         joystick_total = 0.0
@@ -878,6 +878,7 @@ class StationCard(QFrame):
             return None
     def refresh_display_name(self) -> None:
         """Admin paneldan nom o\'zgarganda kartochka sarlavhasini yangilash."""
+        self._name_cache = ''
         self._apply_title_text()
     def set_booking(self, booking: Optional[dict]) -> None:
         """Faol bron: nom yonida vaqt + sariq holat (seans ochiq bo\'lsa ham)."""
@@ -885,7 +886,7 @@ class StationCard(QFrame):
         self._apply_title_text()
         self._refresh_style()
     def _apply_title_text(self) -> None:
-        base = self._port.display_name(self.station_id)
+        base = self.display_name()
         if self._booking:
             when = str(self._booking.get('booking_time') or '')
             short = when
@@ -906,7 +907,12 @@ class StationCard(QFrame):
             self._title.setText(base)
             self._title.setToolTip('')
     def display_name(self) -> str:
-        return self._port.display_name(self.station_id)
+        cached = getattr(self, '_name_cache', '')
+        if cached:
+            return cached
+        name = self._port.display_name(self.station_id)
+        self._name_cache = name
+        return name
     def _on_extra_spin_changed(self, _value: float) -> None:
         if self._busy and self._vip_open:
                 self._update_vip_sum_label()

@@ -42,13 +42,8 @@ def load_clients() -> List[dict]:
         if key not in seen:
             seen[key] = {'name': name, 'phone': phone}
     try:
-        for r in db.list_debtors('', include_paid=True):
-            _add(str(r.get('client_name') or ''), str(r.get('phone') or ''))
-    except Exception:
-        pass
-    try:
-        for r in db.list_bookings('', include_closed=True):
-            _add(str(r.get('client_name') or ''), str(r.get('phone') or ''))
+        for r in db.list_client_contacts():
+            _add(str(r.get('name') or ''), str(r.get('phone') or ''))
     except Exception:
         pass
     return list(seen.values())

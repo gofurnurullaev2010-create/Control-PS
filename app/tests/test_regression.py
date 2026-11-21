@@ -218,5 +218,54 @@ class ServiceLayerTests(unittest.TestCase):
     def test_inventory_products_list(self) -> None:
         products = self.container.inventory.all_products_for_display()
         self.assertIsInstance(products, list)
+class BarCatalogMatchTests(unittest.TestCase):
+    def test_one_liter_does_not_match_half_liter(self) -> None:
+        from app.services.bar_catalog import preselect_combo_index
+        entries = [
+            {'kind': 'drink', 'drink_name': 'Cola', 'volume': 0.5, 'price': 12000, 'quantity': 10},
+            {'kind': 'drink', 'drink_name': 'Cola', 'volume': 1.0, 'price': 15000, 'quantity': 4},
+            {'kind': 'drink', 'drink_name': 'Fanta', 'volume': 0.5, 'price': 12000, 'quantity': 2},
+            {'kind': 'drink', 'drink_name': 'Fanta', 'volume': 2.0, 'price': 20000, 'quantity': 3},
+        ]
+        cola = preselect_combo_index(entries, {'kind': 'drink', 'drink_name': 'Cola', 'volume': 1, 'name': 'Cola 1 L'})
+        fanta = preselect_combo_index(entries, {'kind': 'drink', 'drink_name': 'Fanta', 'volume': 2, 'name': 'Fanta 2 L'})
+        self.assertEqual(cola, 1)
+        self.assertEqual(fanta, 3)
+        self.assertEqual(preselect_combo_index(entries, {'kind': 'drink', 'drink_name': 'Cola', 'volume': 3}), -1)
+    def test_market_matches_by_id(self) -> None:
+        from app.services.bar_catalog import preselect_combo_index
+        entries = [{'kind': 'market', 'id': 4, 'name': 'Chipsi'}, {'kind': 'market', 'id': 9, 'name': 'Chipsi'}]
+        self.assertEqual(preselect_combo_index(entries, {'kind': 'market', 'id': 9, 'name': 'Chipsi'}), 1)
+
+class DebtorLookupTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._db_path = Path(self._tmpdir.name) / 'test_debtors.db'
+        self._patch = patch.object(db, 'DB_PATH', self._db_path)
+        self._patch.start()
+        db._DB_PRAGMA_READY = False
+        db.init_db()
+    def tearDown(self) -> None:
+        self._patch.stop()
+        self._tmpdir.cleanup()
+    def test_client_debts_do_not_need_full_scan_result(self) -> None:
+        db.add_debtor('Ali', '901', 10000)
+        db.add_debtor('Vali', '902', 20000)
+        ali = db.list_debts_for_client('Ali', '901')
+        self.assertEqual(len(ali), 1)
+        self.assertEqual(float(ali[0]['amount']), 10000.0)
+        contacts = db.list_client_contacts()
+        names = {str(c['name']) for c in contacts}
+        self.assertIn('Ali', names)
+        self.assertIn('Vali', names)
+    def test_perf_indexes_exist(self) -> None:
+        conn = db._connect()
+        try:
+            names = {str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+        finally:
+            conn.close()
+        self.assertIn('idx_drink_orders_session', names)
+        self.assertIn('idx_debtors_paid_time', names)
+        self.assertIn('idx_sessions_end', names)
 if __name__ == '__main__':
     unittest.main()

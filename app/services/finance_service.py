@@ -44,10 +44,9 @@ class FinanceService:
     def save_operator_report(self, operator_index: int, report: dict[str, Any]) -> int:
         return self._repo.save_operator_report(operator_index, report)
     def clients_from_debtors(self) -> List[dict[str, Any]]:
-        clients = {}
-        for r in self._repo.list_debtors('', include_paid=True):
-            key = (str(r.get('client_name') or ''), str(r.get('phone') or ''))
-            item = clients.setdefault(key, {'name': key[0], 'phone': key[1], 'debt': 0.0, 'time': str(r.get('debt_time') or '')})
-            if not r.get('paid'):
-                item['debt'] = float(item.get('debt') or 0) + float(r.get('amount') or 0)
-        return list(clients.values())
+        rows = []
+        for item in self._repo.list_client_contacts():
+            row = dict(item)
+            row['time'] = str(row.get('created') or row.get('time') or '')
+            rows.append(row)
+        return rows

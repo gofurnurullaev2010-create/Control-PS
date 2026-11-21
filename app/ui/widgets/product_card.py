@@ -78,7 +78,7 @@ class ProductCard(QFrame):
         try:
             if image:
                 if pix.loadFromData(bytes(image)) and (not pix.isNull()):
-                    scaled = pix.scaled(self.CARD_W - 20, self.IMG_H, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    scaled = pix.scaled(self.CARD_W - 20, self.IMG_H, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
                     self._img.setPixmap(scaled)
                     self._img.setText('')
                     self._img.setStyleSheet('background: transparent; border: none;')

@@ -3,6 +3,7 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QColor, QPixmap, QIcon
 import database as db
+from app.services.bar_catalog import preselect_combo_index
 BG_MAIN = '#FFFFFF'
 BG_HEADER = '#F5F6F8'
 BG_CARD = '#FFFFFF'
@@ -123,31 +124,11 @@ class MarketPanelDialog(QDialog):
     def _apply_preselect(self) -> None:
         if not self._preselect or not hasattr(self, 'order_item'):
             return None
-        else:
-            want_kind = str(self._preselect.get('kind') or 'drink')
-            for i in range(self.order_item.count()):
-                data = self.order_item.itemData(i)
-                if not isinstance(data, dict):
-                    continue
-                else:
-                    kind = str(data.get('kind') or ('market' if 'id' in data and 'drink_name' not in data else 'drink'))
-                    if kind != want_kind:
-                        continue
-                    else:
-                        if want_kind == 'drink':
-                            if str(data.get('drink_name') or '') == str(self._preselect.get('drink_name') or '') and abs(float(data.get('volume') or 0) - float(self._preselect.get('volume') or 0)) < 1e-06:
-                                self.order_item.setCurrentIndex(i)
-                                return
-                            else:
-                                label = self.order_item.itemText(i).lower()
-                                pname = str(self._preselect.get('name') or '').lower()
-                                if pname and pname.split()[0] in label and (f"{float(self._preselect.get('volume') or 0):g}" in label.replace(',', '.')):
-                                    self.order_item.setCurrentIndex(i)
-                                    return
-                        else:
-                            if int(data.get('id') or 0) == int(self._preselect.get('id') or (-1)):
-                                self.order_item.setCurrentIndex(i)
-                                break
+        entries = []
+        for i in range(self.order_item.count()):
+            entries.append(self.order_item.itemData(i))
+        index = preselect_combo_index(entries, self._preselect)
+        self.order_item.setCurrentIndex(index)
     def setup_order_tab(self, combined: bool=False):
         self._order_combined = bool(combined) or self._all_mode or self._sales_only
         layout = QVBoxLayout(self.order_tab)
@@ -393,33 +374,34 @@ class MarketPanelDialog(QDialog):
             return out
     def load_data(self):
         try:
-            drinks = db.get_drink_prices()
-            markets = db.get_market_products()
+            need_image = not self._sales_only
+            drinks = db.get_drink_prices(with_image=need_image)
+            markets = db.get_market_products(with_image=need_image)
             self.order_item.clear()
             combined = getattr(self, '_order_combined', False) or self._all_mode or self._sales_only
+            def _payload(item: dict, kind: str) -> dict:
+                row = {key: value for key, value in dict(item).items() if key != 'image'}
+                row['kind'] = kind
+                return row
             if combined:
                 for d in drinks:
-                    row = dict(d)
-                    row['kind'] = 'drink'
+                    row = _payload(d, 'drink')
                     vol = d.get('volume', 0.0)
                     qty = int(d.get('quantity', 0) or 0)
                     self.order_item.addItem(f"🥤 {d['drink_name']} ({vol:g}L) - {int(d['price'])} so\'m [{qty} ta]", row)
                 for d in markets:
-                    row = dict(d)
-                    row['kind'] = 'market'
+                    row = _payload(d, 'market')
                     qty = int(d.get('quantity', 0) or 0)
                     self.order_item.addItem(f"🍔 {d['name']} ({float(d.get('grams', 0) or 0):g}g) - {int(d['price'])} so\'m [{qty} ta]", row)
             else:
                 if self._is_market:
                     for d in markets:
-                        row = dict(d)
-                        row['kind'] = 'market'
+                        row = _payload(d, 'market')
                         qty = int(d.get('quantity', 0) or 0)
                         self.order_item.addItem(f"{d['name']} ({float(d.get('grams', 0) or 0):g}g) - {int(d['price'])} so\'m [{qty} ta]", row)
                 else:
                     for d in drinks:
-                        row = dict(d)
-                        row['kind'] = 'drink'
+                        row = _payload(d, 'drink')
                         vol = d.get('volume', 0.0)
                         qty = int(d.get('quantity', 0) or 0)
                         self.order_item.addItem(f"{d['drink_name']} ({vol:g}L) - {int(d['price'])} so\'m [{qty} ta]", row)

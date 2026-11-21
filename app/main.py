@@ -34,6 +34,8 @@ def main() -> None:
     install_exception_hook()
     install_qt_message_handler()
     init_database()
+    from app.db.database import schedule_database_backup
+    schedule_database_backup()
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
     guard = enforce_single_instance(app)

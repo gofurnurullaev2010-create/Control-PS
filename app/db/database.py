@@ -29,6 +29,8 @@ def _connect() -> sqlite3.Connection:
         conn.execute('PRAGMA journal_mode = WAL')
         conn.execute('PRAGMA synchronous = NORMAL')
         conn.execute('PRAGMA temp_store = MEMORY')
+        conn.execute('PRAGMA cache_size = -65536')
+        conn.execute('PRAGMA mmap_size = 268435456')
         _DB_PRAGMA_READY = True
     return conn
 def check_database_integrity() -> bool:
@@ -38,7 +40,7 @@ def check_database_integrity() -> bool:
     else:
         conn = _connect()
         try:
-            row = conn.execute('PRAGMA integrity_check').fetchone()
+            row = conn.execute('PRAGMA quick_check').fetchone()
             ok = row is not None and str(row[0]).lower() == 'ok'
             if not ok:
                 logger.critical('SQLite integrity_check: %s', row[0] if row else '?')
@@ -163,32 +165,67 @@ def init_db() -> None:
         cur.execute('SELECT 1 FROM drink_prices WHERE drink_name = ? AND volume = ?', (drink_name, volume))
         if cur.fetchone() is None:
             cur.execute('INSERT INTO drink_prices (drink_name, volume, price) VALUES (?, ?, ?)', (drink_name, volume, price))
+    _ensure_perf_indexes(cur)
     conn.commit()
     conn.close()
     try:
         if not check_database_integrity():
             logger.warning('Baza tekshiruvi muvaffaqiyatsiz. control_ps_backup_*.db dan tiklash mumkin.')
-        backup_database_if_needed()
     except Exception as e:
-        logger.warning('Baza zaxirasi: %s', e)
+        logger.warning('Baza tekshiruvi: %s', e)
+def _ensure_perf_indexes(cur: sqlite3.Cursor) -> None:
+    """Katta klub bazasida qidiruv jadvalni boshidan oxirigacha o'qimasin."""
+    statements = [
+        'CREATE INDEX IF NOT EXISTS idx_debtors_paid_time ON debtors (paid, debt_time)',
+        'CREATE INDEX IF NOT EXISTS idx_debtors_client ON debtors (client_name, phone, paid)',
+        'CREATE INDEX IF NOT EXISTS idx_debt_events_debtor ON debt_payment_events (debtor_id)',
+        'CREATE INDEX IF NOT EXISTS idx_debt_events_time ON debt_payment_events (paid_time)',
+        'CREATE INDEX IF NOT EXISTS idx_drink_orders_session ON drink_orders (session_id)',
+        'CREATE INDEX IF NOT EXISTS idx_drink_orders_station ON drink_orders (station_id, session_id)',
+        'CREATE INDEX IF NOT EXISTS idx_drink_orders_time ON drink_orders (order_time)',
+        'CREATE INDEX IF NOT EXISTS idx_sessions_end ON sessions (end_time)',
+        'CREATE INDEX IF NOT EXISTS idx_sessions_station_open ON sessions (station_id, end_time)',
+        'CREATE INDEX IF NOT EXISTS idx_bookings_status_time ON bookings (status, booking_time)',
+        'CREATE INDEX IF NOT EXISTS idx_expenses_time ON expenses (created_time)',
+        'CREATE INDEX IF NOT EXISTS idx_click_time ON click_entries (created_time)',
+    ]
+    for sql in statements:
+        try:
+            cur.execute(sql)
+        except sqlite3.OperationalError as exc:
+            logger.warning('Indeks yaratilmadi: %s', exc)
 def backup_database_if_needed(max_keep: int=30) -> None:
     """Kuniga bir marta control_ps.db nusxasi (control_ps_backup_YYYY-MM-DD.db)."""
-    import shutil
     if not DB_PATH.is_file():
         return
-    else:
-        stamp = date.today().isoformat()
-        dest = DB_PATH.parent / f'control_ps_backup_{stamp}.db'
-        if dest.is_file():
-            return
-        else:
-            shutil.copy2(DB_PATH, dest)
-            backups = sorted(DB_PATH.parent.glob('control_ps_backup_*.db'), reverse=True)
-            for old in backups[max_keep:]:
-                try:
-                    old.unlink()
-                except OSError:
-                    pass
+    stamp = date.today().isoformat()
+    dest = DB_PATH.parent / f'control_ps_backup_{stamp}.db'
+    if dest.is_file():
+        return
+    src = sqlite3.connect(str(DB_PATH))
+    try:
+        dst = sqlite3.connect(str(dest))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    backups = sorted(DB_PATH.parent.glob('control_ps_backup_*.db'), reverse=True)
+    for old in backups[max_keep:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+def schedule_database_backup() -> None:
+    """Katta bazani nusxalash oynani qotitmasin."""
+    import threading
+    def _backup_quiet() -> None:
+        try:
+            backup_database_if_needed()
+        except Exception as exc:
+            logger.warning('Baza zaxirasi: %s', exc)
+    threading.Thread(target=_backup_quiet, daemon=True, name='db-backup').start()
 def get_hourly_rate() -> float:
     conn = _connect()
     row = conn.execute('SELECT hourly_rate FROM prices WHERE id = 1').fetchone()
@@ -861,10 +898,13 @@ def find_catalog_image(item_type: str, name: str, volume: float=0.0) -> Optional
         return None
     finally:
         conn.close()
-def get_drink_prices() -> List[dict[str, Any]]:
-    """Barcha ichimlik narxlari ro\'yxati (rasm bilan)."""
+def get_drink_prices(with_image: bool=True) -> List[dict[str, Any]]:
+    """Barcha ichimlik narxlari ro\'yxati. Sotish ro\'yxatida rasm shart emas."""
+    cols = 'drink_name, volume, price, quantity, COALESCE(cost_price, 0) AS cost_price'
+    if with_image:
+        cols = 'drink_name, volume, price, quantity, image, COALESCE(cost_price, 0) AS cost_price'
     conn = _connect()
-    rows = conn.execute('SELECT drink_name, volume, price, quantity, image, COALESCE(cost_price, 0) AS cost_price FROM drink_prices ORDER BY drink_name, volume').fetchall()
+    rows = conn.execute(f'SELECT {cols} FROM drink_prices ORDER BY drink_name, volume').fetchall()
     conn.close()
     return [dict(r) for r in rows]
 _BAR_ORDER_KEY = 'bar_product_order'
@@ -1246,10 +1286,11 @@ def add_market_product(name: str, price: float, grams: float=0, quantity: int=0,
     new_id = cur.lastrowid
     conn.close()
     return int(new_id)
-def get_market_products() -> List[dict[str, Any]]:
-    """Barcha market mahsulotlari ro\'yxati (rasm bilan)."""
+def get_market_products(with_image: bool=True) -> List[dict[str, Any]]:
+    """Barcha market mahsulotlari. Sotish ro'yxatida rasm shart emas."""
+    image_col = 'image,' if with_image else ''
     conn = _connect()
-    rows = conn.execute('\n        SELECT id, name, price, category, description, grams, quantity, image,\n               COALESCE(cost_price, 0) AS cost_price\n        FROM market_products ORDER BY name\n        ').fetchall()
+    rows = conn.execute(f'\n        SELECT id, name, price, category, description, grams, quantity, {image_col}\n               COALESCE(cost_price, 0) AS cost_price\n        FROM market_products ORDER BY name\n        ').fetchall()
     conn.close()
     return [dict(r) for r in rows]
 def get_market_product(product_id: int) -> Optional[dict[str, Any]]:
@@ -1440,6 +1481,65 @@ def list_debtors(search: str='', day: Optional[str]=None, include_paid: bool=Fal
     rows = conn.execute(f'\n        SELECT id, client_name, phone, amount, debt_time, note, paid, paid_time\n        FROM debtors\n        {where}\n        ORDER BY debt_time DESC, id DESC\n        ', params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+def list_debts_for_client(client_name: str, phone: str='', *, include_paid: bool=False, newest_first: bool=True) -> List[dict[str, Any]]:
+    """Bitta klient qarizlari. Butun jadvalni xotiraga olmaysiz."""
+    name = (client_name or '').strip()
+    phone_n = (phone or '').strip()
+    clauses = ['client_name = ?', "COALESCE(phone, '') = ?"]
+    params: list[Any] = [name, phone_n]
+    if not include_paid:
+        clauses.append('paid = 0')
+    order = 'DESC' if newest_first else 'ASC'
+    conn = _connect()
+    rows = conn.execute(f'''
+        SELECT id, client_name, phone, amount, debt_time, note, paid, paid_time
+        FROM debtors
+        WHERE {' AND '.join(clauses)}
+        ORDER BY debt_time {order}, id {order}
+        ''', params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+def list_client_contacts() -> List[dict[str, Any]]:
+    """Klientlar: qariz + bron bo'yicha guruh. Har bir qarz qatorini ko'tarmaydi."""
+    conn = _connect()
+    try:
+        debt_rows = conn.execute('''
+            SELECT client_name AS name, COALESCE(phone, '') AS phone,
+                   SUM(CASE WHEN paid = 0 THEN COALESCE(amount, 0) ELSE 0 END) AS debt,
+                   MIN(debt_time) AS created
+            FROM debtors
+            GROUP BY client_name, COALESCE(phone, '')
+            ''').fetchall()
+        try:
+            book_rows = conn.execute('''
+                SELECT client_name AS name, COALESCE(phone, '') AS phone,
+                       MIN(COALESCE(booking_time, created_time)) AS created
+                FROM bookings
+                GROUP BY client_name, COALESCE(phone, '')
+                ''').fetchall()
+        except sqlite3.OperationalError:
+            book_rows = []
+    finally:
+        conn.close()
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in debt_rows:
+        name = str(row['name'] or '').strip()
+        phone = str(row['phone'] or '').strip()
+        if not name and not phone:
+            continue
+        merged[(name, phone)] = {'name': name, 'phone': phone, 'debt': float(row['debt'] or 0), 'created': str(row['created'] or '')}
+    for row in book_rows:
+        name = str(row['name'] or '').strip()
+        phone = str(row['phone'] or '').strip()
+        if not name and not phone:
+            continue
+        created = str(row['created'] or '')
+        item = merged.get((name, phone))
+        if item is None:
+            merged[(name, phone)] = {'name': name, 'phone': phone, 'debt': 0.0, 'created': created}
+        elif created and (not item['created'] or created < str(item['created'])):
+            item['created'] = created
+    return list(merged.values())
 def debtor_day_summary(include_paid: bool=False) -> List[dict[str, Any]]:
     """Chap panel uchun kunlar bo\'yicha qarz jami."""
     conn = _connect()
@@ -1542,7 +1642,7 @@ def pay_client_debts(client_name: str, phone: str='', amount: Optional[float]=No
     """Klientning ochiq qarizlarini to\'lash. Qaytadi: to\'langan jami."""
     name = (client_name or '').strip()
     phone_n = (phone or '').strip()
-    open_rows = [r for r in list_debtors('', include_paid=False) if str(r.get('client_name') or '') == name and str(r.get('phone') or '') == phone_n]
+    open_rows = list_debts_for_client(name, phone_n, include_paid=False, newest_first=False)
     if not open_rows:
         return 0.0
     else:
