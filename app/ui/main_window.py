@@ -46,7 +46,7 @@ class MainWindow(QMainWindow):
         if logo_path and logo_path.exists():
                 self.setWindowIcon(QIcon(str(logo_path)))
         self._build_shell()
-        self._populate_station_grid(wake_restored_tvs=True)
+        self._populate_station_grid(wake_restored_tvs=False)
         self._customer_display = CustomerDisplayWindow()
         self._show_customer_display()
         self._zakaz_bridge = _ZakazBridge(self)
@@ -474,7 +474,7 @@ class MainWindow(QMainWindow):
                                                 if key == 'clients':
                                                     self._clients_page.set_search(self._search.text(), refresh=False)
                                                     self._clients_page.reload()
-                                                    self._content_title.setText(f'Klientler ({self._clients_page.table.rowCount()})')
+                                                    self._content_title.setText(f'Klientler ({self._clients_page.row_count()})')
                                                 else:
                                                     if key == 'balance':
                                                         bal = self._presenter.balance()

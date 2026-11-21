@@ -2,9 +2,9 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable, Optional
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PyQt6.QtGui import QColor, QFont
-from PyQt6.QtWidgets import QAbstractItemView, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QAbstractItemView, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QTableView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 import database as db
 from app.ui.dialogs.colors import BG_CARD, BG_HEADER, BORDER_COLOR, COL_RED, TEXT_PRIMARY, TEXT_SECONDARY
 from app.ui.theme import ACCENT, ACCENT_HOVER
@@ -48,6 +48,51 @@ def list_clients_aggregated(search: str='') -> list[dict[str, Any]]:
         rows = [c for c in rows if q in str(c.get('name') or '').lower() or q in str(c.get('phone') or '').lower()]
     rows.sort(key=lambda c: str(c.get('created') or ''), reverse=True)
     return rows
+class _ClientsModel(QAbstractTableModel):
+    """Faqat ko'rinadigan klient qatorlari chiziladi."""
+    _headers = ['№', 'Ati', 'Telefoni', "Ja'mi qarzi", "Jaratilg'an waqti"]
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._rows: list[dict[str, Any]] = []
+    def set_rows(self, rows: list[dict[str, Any]]) -> None:
+        self.beginResetModel()
+        self._rows = list(rows)
+        self.endResetModel()
+    def rowCount(self, parent: QModelIndex | None=None) -> int:
+        if parent is not None and parent.isValid():
+            return 0
+        return len(self._rows)
+    def columnCount(self, parent: QModelIndex | None=None) -> int:
+        if parent is not None and parent.isValid():
+            return 0
+        return 5
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal and 0 <= section < 5:
+            return self._headers[section]
+        return None
+    def data(self, index: QModelIndex, role: int=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        row = self._rows[index.row()]
+        col = index.column()
+        if role == Qt.ItemDataRole.DisplayRole:
+            if col == 0:
+                return str(index.row() + 1)
+            if col == 1:
+                return str(row.get('name') or '—')
+            if col == 2:
+                return str(row.get('phone') or '—')
+            if col == 3:
+                return _fmt_money(float(row.get('debt') or 0))
+            return _fmt_dt_short(str(row.get('created') or ''))
+        if role == Qt.ItemDataRole.ForegroundRole and col == 3 and float(row.get('debt') or 0) > 0:
+            return QColor(COL_RED)
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            if col in (0, 4):
+                return int(Qt.AlignmentFlag.AlignCenter)
+            if col == 3:
+                return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        return None
 class ClientsPage(QWidget):
     """Chapda klientlar jadvali, o\'ngda Klient mag\'liwmati."""
     def __init__(self, parent=None, on_changed: Optional[Callable[[], None]]=None) -> None:
@@ -61,9 +106,9 @@ class ClientsPage(QWidget):
         root.setSpacing(12)
         left = QVBoxLayout()
         left.setSpacing(0)
-        self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(['№', 'Ati', 'Telefoni', 'Ja\'mi qarzi', 'Jaratilg\'an waqti'])
+        self._model = _ClientsModel(self)
+        self.table = QTableView()
+        self.table.setModel(self._model)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -71,12 +116,14 @@ class ClientsPage(QWidget):
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(44)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
-        self.table.setStyleSheet(f'\n            QTableWidget {{\n                background: {BG_CARD}; border: 1px solid {BORDER_COLOR}; border-radius: 10px;\n                gridline-color: {BORDER_COLOR}; font-size: 13px;\n            }}\n            QHeaderView::section {{\n                background: {BG_HEADER}; padding: 10px 8px; border: none;\n                border-bottom: 1px solid {BORDER_COLOR}; font-weight: 800;\n            }}\n            QTableWidget::item:selected {{ background: #E8EDF5; color: {TEXT_PRIMARY}; }}\n            ')
-        self.table.itemSelectionChanged.connect(self._on_row_selected)
+        self.table.setWordWrap(False)
+        self.table.setStyleSheet(f'\n            QTableView {{\n                background: {BG_CARD}; border: 1px solid {BORDER_COLOR}; border-radius: 10px;\n                gridline-color: {BORDER_COLOR}; font-size: 13px;\n            }}\n            QHeaderView::section {{\n                background: {BG_HEADER}; padding: 10px 8px; border: none;\n                border-bottom: 1px solid {BORDER_COLOR}; font-weight: 800;\n            }}\n            QTableView::item:selected {{ background: #E8EDF5; color: {TEXT_PRIMARY}; }}\n            ')
+        self.table.selectionModel().selectionChanged.connect(self._on_row_selected)
         left.addWidget(self.table)
         root.addLayout(left, 1)
         self._detail = QFrame()
@@ -165,49 +212,31 @@ class ClientsPage(QWidget):
         self._search = text
         if refresh and not same:
             self.reload()
+    def row_count(self) -> int:
+        return len(self._rows)
     def reload(self) -> None:
         prev = None
         if self._current:
             prev = (self._current.get('name'), self._current.get('phone'))
         self._rows = list_clients_aggregated(self._search)
-        self.table.setUpdatesEnabled(False)
-        self.table.blockSignals(True)
-        select_row = (-1)
-        try:
-            self.table.setRowCount(len(self._rows))
-            self.table.verticalHeader().setDefaultSectionSize(44)
+        select_row = -1
+        if prev:
             for i, c in enumerate(self._rows):
-                no = QTableWidgetItem(str(i + 1))
-                no.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                name = QTableWidgetItem(str(c.get('name') or '—'))
-                phone = QTableWidgetItem(str(c.get('phone') or '—'))
-                debt = float(c.get('debt') or 0)
-                debt_item = QTableWidgetItem(_fmt_money(debt))
-                debt_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if debt > 0:
-                    debt_item.setForeground(QColor(COL_RED))
-                when = QTableWidgetItem(_fmt_dt_short(str(c.get('created') or '')))
-                when.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.table.setItem(i, 0, no)
-                self.table.setItem(i, 1, name)
-                self.table.setItem(i, 2, phone)
-                self.table.setItem(i, 3, debt_item)
-                self.table.setItem(i, 4, when)
-                if prev and (c.get('name'), c.get('phone')) == prev:
+                if (c.get('name'), c.get('phone')) == prev:
                     select_row = i
+                    break
+        self.table.setUpdatesEnabled(False)
+        try:
+            self._model.set_rows(self._rows)
         finally:
             self._table_ready = True
-            self.table.blockSignals(False)
             self.table.setUpdatesEnabled(True)
         if select_row >= 0:
             self.table.selectRow(select_row)
             self._show_detail(self._rows[select_row])
         else:
-            if self._rows:
-                self.table.clearSelection()
-                self._show_empty()
-            else:
-                self._show_empty()
+            self.table.clearSelection()
+            self._show_empty()
     def add_client(self) -> None:
         dlg = QDialog(self)
         dlg.setWindowTitle('Yangi klient')
@@ -250,7 +279,7 @@ class ClientsPage(QWidget):
         conn.execute('\n            INSERT INTO debtors (client_name, phone, amount, debt_time, note, paid, paid_time)\n            VALUES (?, ?, 0, ?, \'klient_royxat\', 1, ?)\n            ', (name, phone, now, now))
         conn.commit()
         conn.close()
-    def _on_row_selected(self) -> None:
+    def _on_row_selected(self, *_args) -> None:
         rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
         if not rows:
             return

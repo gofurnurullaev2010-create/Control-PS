@@ -110,6 +110,8 @@ class StationCard(QFrame):
         self._charges_cache = (0.0, 0.0)
         self._charges_cache_mono = 0.0
         self._hdmi_cached = None
+        self._rate_slots_cache = None
+        self._rate_slots_mono = 0.0
         self._block_generation = 0
         self._suppress_block_until = 0.0
         self._booking = None
@@ -379,10 +381,23 @@ class StationCard(QFrame):
         import threading
         import time
         if self._block_thread_running:
-            self._pending_hard_block = (settings, False if ignore_busy else quick)
+            self._pending_hard_block = (settings, False if ignore_busy else quick, bool(ignore_busy))
             return
         gen = self._block_generation
         self._block_thread_running = True
+
+        def _undo_if_user_started(handler) -> bool:
+            """Blok ketayotganda foydalanuvchi START bosgan bo'lsa, qulfni yechish.
+
+            Bo'sh stolning qayta tekshiruvi STARTdagi o'yinni HDMI ga tortmaydi.
+            """
+            if gen == self._block_generation or not self._busy:
+                return False
+            try:
+                handler.unblock_screen()
+            except Exception:
+                pass
+            return True
 
         def _runner() -> None:
             try:
@@ -403,39 +418,28 @@ class StationCard(QFrame):
                     if tv_platforms.WEBOS_POWER_OFF_ON_STOP:
                         if ignore_busy:
                             handler.block_screen(quick=quick, force=True)
-                        if gen != self._block_generation:
-                            try:
-                                handler.unblock_screen()
-                            except Exception:
-                                pass
+                        _undo_if_user_started(handler)
                         return
                     if not ignore_busy and not tv_handler._should_lock_tv(host):
                         return
                     pc_ip, gate_url = handler._smart_tv_gate_context()
                     params = tv_platforms.build_launch_params(pc_ip, host, gate_url, action='lock', hdmi_input=int(settings.hdmi_input or 1))
                     tv_platforms.webos_ensure_lock(host, params)
-                    if gen != self._block_generation:
-                        try:
-                            handler.unblock_screen()
-                        except Exception:
-                            pass
+                    _undo_if_user_started(handler)
                     return
                 if tv_platforms.is_smart_tv_brand(settings.brand):
                     if not ignore_busy and not tv_handler._should_lock_tv(host):
                         return
                 handler.block_screen(quick=quick, force=ignore_busy)
-                if gen != self._block_generation:
-                    try:
-                        handler.unblock_screen()
-                    except Exception:
-                        pass
+                _undo_if_user_started(handler)
             finally:
                 self._block_thread_running = False
                 pending = self._pending_hard_block
                 if pending is not None:
                     self._pending_hard_block = None
-                    s, q = pending
-                    self._run_block_tv_async(s, quick=q, ignore_busy=True)
+                    s, q, force = pending
+                    if force or not self._busy:
+                        self._run_block_tv_async(s, quick=q, ignore_busy=force)
 
         threading.Thread(target=_runner, daemon=True).start()
 
@@ -870,10 +874,6 @@ class StationCard(QFrame):
                 if self._busy:
                     self._arm_unblock_protection()
                     self._register_tv_session_gate()
-                    if self._wake_restored_tvs:
-                        settings = self._port.tv_settings(self.station_id)
-                        if settings.tv_ip:
-                            self._wake_and_unblock_tv_async()
         except Exception:
             return None
     def refresh_display_name(self) -> None:
@@ -882,6 +882,8 @@ class StationCard(QFrame):
         self._apply_title_text()
     def set_booking(self, booking: Optional[dict]) -> None:
         """Faol bron: nom yonida vaqt + sariq holat (seans ochiq bo\'lsa ham)."""
+        if booking == self._booking:
+            return
         self._booking = booking
         self._apply_title_text()
         self._refresh_style()
@@ -1067,13 +1069,26 @@ class StationCard(QFrame):
             start = start_dt or self._session_start_dt
             rate = resolve_billing_rate(station_id, start, self._session_billing_rate or None)
             return round(time_amount(rate, int(elapsed_seconds)), 2)
+    def _rate_slots(self) -> tuple:
+        """Tarif slotlari seans davomida qayta-qayta o'qilmaydi."""
+        import time
+        now = time.monotonic()
+        cached = self._rate_slots_cache
+        if cached is not None and now - float(self._rate_slots_mono or 0) < 60.0:
+            return cached
+        from app.core.ps_billing import load_station_rate_slots
+        loaded = load_station_rate_slots(self.station_id)
+        self._rate_slots_cache = loaded
+        self._rate_slots_mono = now
+        return loaded
     def _ps_live_amount(self) -> float:
         """Jonli PLAYSTATION ustuni — qulflangan tarif, bazaga har soniya bormaslik."""
-        from app.core.ps_billing import slot_playstation_amount, time_amount, wall_seconds
+        from app.core.ps_billing import slot_walked_amount, time_amount, wall_seconds
         now = trusted_now_naive()
         seconds = wall_seconds(self._session_start_dt, now)
         if self._slot_billing and not self._vip_open:
-            return float(slot_playstation_amount(self.station_id, start=self._session_start_dt, seconds=seconds))
+            slots, fallback = self._rate_slots()
+            return float(slot_walked_amount(self._session_start_dt, seconds, slots, fallback))
         rate = float(self._session_billing_rate or 0)
         if rate <= 0:
             from app.core.ps_billing import resolve_billing_rate

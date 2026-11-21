@@ -294,7 +294,6 @@ def _poll_webos_tv_connectivity() -> None:
                             tv_platforms.clear_ares_device_cache(host)
                             if host in live:
                                 tv_platforms.register_webos_device_mapping(host, live[host])
-                            tv_platforms.webos_push_station_config(host, pc_ip=pc_ip, gate_url=gate_url, hdmi_input=hdmi)
                         continue
                     if not online:
                         mark_lock_pending(host)
